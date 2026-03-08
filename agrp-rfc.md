@@ -77,8 +77,8 @@ At runtime, AGRP centers work around Exchanges. A Realm is an optional stateful 
  [Authorized Exchange B] -- authorized access -----------> [Realm State]
  [Realm State] ------------------------------------------> [Audit Log]
 
- [Authorized Exchange A] -- delegated text + signed mandate -> [Sidecar: agent1] -- invoke / poll -> [Passive Agent 1]
- [Authorized Exchange B] -- delegated text + signed mandate -> [Sidecar: agent2] -- invoke / poll -> [Passive Agent 2]
+ [Authorized Exchange A] -- delegated text + signed mandate -> [Sidecar: agent1] -- ACP --> [Agent Process 1]
+ [Authorized Exchange B] -- delegated text + signed mandate -> [Sidecar: agent2] -- ACP --> [Agent Process 2]
  [Authorized Exchange A] -- resource_call -------------------> [Environment / Resource Service]
 
  [Agent Runtime Lifecycle Manager] -- spawns + resumes -----> [Sidecar: agent1]
@@ -154,22 +154,22 @@ MCP connects agents to tools. ACP connects editors to agents. A2A enables agent-
 
 An agent is a logical autonomous worker addressed by name within the mesh; resolution is handled by the Exchange and Control Plane.
 
-In AGRP v1, every agent participates through a **1:1 attached sidecar** that connects to the Exchange, invokes or polls the agent through a local adapter, and emits AGSP messages on the agent's behalf. The sidecar is an implementation detail of the agent runtime and is not exposed to users as a separate participant identity.
+In AGRP v1, every agent participates through a **1:1 attached sidecar** that connects to the Exchange, speaks ACP to its parent agent, and emits AGSP messages on the agent's behalf. The sidecar is an implementation detail of the agent runtime and is not exposed to users as a separate participant identity.
 
 An agent is instantiated with a **harness** — a configuration bundle specifying the model, provider, tools, skills, and behavioral constraints. The harness is opaque to the protocol; AGRP treats it as metadata stored in the Control Plane and passed to the Agent Runtime Lifecycle Manager at spawn time.
 
-Agents may use ACP, MCP, A2A, or other local execution interfaces through their sidecar/runtime adapter. AGRP is concerned only with routing, policy, and realm topology, not with how the agent executes its local work.
+AGRP reaches the agent through ACP on the attached sidecar. MCP and A2A may still be used by the agent for tool access and collaboration, but they are orthogonal to the Exchange-facing AGRP/AGSP path.
 
 ### 2.1.1 Agent Sidecar
 
 An agent sidecar is a child transport adapter managed alongside exactly one agent by the ARLM or realm runtime. The sidecar:
 
 - Terminates AGSP on behalf of its parent agent
-- Translates between AGSP and the agent's local interface (ACP, stdio, HTTP, SDK, queue, or similar)
-- Invokes or polls the agent and returns replies, protocol-level requests that need Exchange mediation, and failures
+- Translates between AGSP and ACP
+- Uses ACP to deliver delegated requests to the agent and receive replies, protocol-level requests that need Exchange mediation, and failures
 - Verifies received signed mandates and enforces them locally on delegated requests
 
-Agents do not send unsolicited AGSP protocol messages in v1. They reply only when invoked or polled by their sidecar.
+Agents do not speak AGSP directly in v1. They interact with the mesh only through ACP on their attached sidecar.
 
 ### 2.2 Exchange
 
@@ -281,12 +281,12 @@ A typical realm with CLI, Telegram, and a single agent:
                       |
                [Sidecar: claude]
                       |
-             invoke / poll locally
+                    ACP
                       |
                 [Agent: claude]
 ```
 
-All external Exchange edges in this example are AGSP sessions. The agent process is not. The Exchange talks to the agent through its attached sidecar, and the sidecar invokes or polls the local agent. When the agent produces a reply, the sidecar emits the corresponding AGSP message and the Exchange fans it out to CLI and both bridges. When a human types in the Telegram thread, the bridge forwards it as an AGSP message attributed to that human; if the message has no explicit agent target, the Exchange stores it as an `exchange_message` in the local transcript/history when enabled.
+All external Exchange edges in this example are AGSP sessions. The agent process is not. The Exchange talks to the agent through its attached sidecar, and the sidecar talks to the local agent over ACP. When the agent produces a reply over ACP, the sidecar emits the corresponding AGSP message and the Exchange fans it out to CLI and both bridges. When a human types in the Telegram thread, the bridge forwards it as an AGSP message attributed to that human; if the message has no explicit agent target, the Exchange stores it as an `exchange_message` in the local transcript/history when enabled.
 
 ### 3.2.1 Agent Attachment and Join Flow
 
@@ -294,7 +294,7 @@ The protocol layers are intentionally split:
 
 - **AGRP** is the overall system layer: Control Plane, Exchange, routing, realm access, policy, audit, and lifecycle.
 - **AGSP** is the session protocol used when the sidecar joins the Exchange and when the Exchange exchanges messages with humans, bridges, peer Exchanges, and ARLM.
-- **ACP** is a local agent-facing protocol. It is not spoken on the Exchange wire. A sidecar may use ACP, stdio JSON-RPC, HTTP, or another local adapter to talk to the agent process.
+- **ACP** is the local sidecar-to-agent protocol. It is not spoken on the Exchange wire.
 
 ```mermaid
 flowchart LR
@@ -310,7 +310,7 @@ flowchart LR
     subgraph runtime["Agent runtime"]
         sidecar[Attached Sidecar]
         agent[Agent Process]
-        sidecar <-->|ACP or local adapter| agent
+        sidecar <-->|ACP| agent
     end
 
     humans[Humans / Bridges / Peer Exchanges] <-->|AGSP| exchange
@@ -319,15 +319,40 @@ flowchart LR
     arlm -->|spawn| agent
 ```
 
+```mermaid
+sequenceDiagram
+    participant CP as Control Plane
+    participant ARLM as ARLM
+    participant EX as Exchange
+    participant SC as Attached Sidecar
+    participant AG as Agent Process
+    participant HB as Human or Bridge
+
+    CP->>ARLM: AGRP spawn/configure agent + sidecar
+    CP->>EX: AGRP routing / realm access
+    ARLM->>AG: start agent process
+    ARLM->>SC: start attached sidecar
+    SC->>AG: ACP initialize / attach
+    SC->>EX: AGSP initialize(role=agent, realm?)
+    EX-->>SC: AGSP initialize_response
+    SC->>EX: AGSP ready
+    HB->>EX: AGSP delegated text / request
+    EX->>SC: AGSP delegated message + mandate
+    SC->>AG: ACP request
+    AG-->>SC: ACP response
+    SC-->>EX: AGSP text / result / failure
+    EX-->>HB: AGRP-routed fan-out / approval / result
+```
+
 Join and interaction flow in base AGRP v1:
 
 1. The Control Plane tells the ARLM to start the agent and its attached sidecar.
-2. The sidecar establishes its local control channel to the agent process, for example via ACP.
+2. The sidecar establishes an ACP session with the agent process.
 3. The sidecar joins the Exchange over **AGSP** with role `agent` and optional `realm`.
 4. The Exchange returns session metadata, capabilities, and the current routing snapshot.
 5. Humans, bridges, or peer Exchanges send AGRP-routed messages to the Exchange; the Exchange delivers delegated work to the sidecar over **AGSP**.
-6. The sidecar invokes or polls the agent over **ACP** or another local adapter.
-7. The agent replies locally; the sidecar translates that reply back into **AGSP** and sends it to the Exchange for routing, fan-out, approvals, or resource mediation under **AGRP** rules.
+6. The sidecar forwards delegated work to the agent over **ACP**.
+7. The agent replies over **ACP**; the sidecar translates that reply back into **AGSP** and sends it to the Exchange for routing, fan-out, approvals, or resource mediation under **AGRP** rules.
 
 ### 3.3 Multi-Exchange Topology
 
@@ -922,7 +947,7 @@ AGRP is designed to be **compatible with and complementary to** these protocols:
 - **MCP:** Agents within an AGRP realm freely use MCP to access tools and data. The Exchange does not interfere with MCP connections. An MCP server can be co-located with the realm environment for shared tool access.
 - **A2A:** Boundary Exchanges expose A2A-compatible endpoints for interoperability. A2A messages between mesh-hosted agents are transparently relayed through the AGRP fabric.
 - **AGENTS.md:** Agent configuration (including AGENTS.md conventions) is orthogonal to AGRP. The ARLM may use AGENTS.md to configure spawned agents.
-- **ACP:** Agents that are ACP-compatible coding agents (e.g., Claude Code, Gemini CLI) can be spawned inside a realm and connected to an editor via an ACP bridge. The bridge translates ACP's stdio JSON-RPC into AGSP sessions.
+- **ACP:** Agents that speak ACP (e.g., Claude Code, Gemini CLI) can be spawned inside a realm and connected to an editor via an ACP bridge. The bridge translates ACP JSON-RPC into AGSP sessions.
 
 AGRP does not seek to replace any of these protocols. It provides the managed infrastructure mesh beneath them.
 

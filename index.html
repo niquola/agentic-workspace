@@ -321,8 +321,8 @@ flowchart TB
     exchangeA -->|delegated text + signed mandate| sidecar1[Sidecar: agent1]
     exchangeB -->|delegated text + signed mandate| sidecar2[Sidecar: agent2]
     exchangeA -->|resource_call| ers[Environment / Resource Service]
-    sidecar1 -->|invoke / poll| agent1[Passive Agent 1]
-    sidecar2 -->|invoke / poll| agent2[Passive Agent 2]
+    sidecar1 -->|ACP| agent1[Agent Process 1]
+    sidecar2 -->|ACP| agent2[Agent Process 2]
     arlm -->|spawns + resumes| sidecar1
     arlm -->|spawns + resumes| sidecar2
     arlm -->|provisions| ers
@@ -348,7 +348,7 @@ flowchart TB
     filebridge[File Mount Bridge] -->|AGSP| exchange
     filebridge --> fuse[FUSE mount at ~/relay/ns/proj]
     exchange -->|AGSP via attached sidecar| sidecar[Sidecar: claude]
-    sidecar -->|invoke / poll locally| agent[Agent: claude]
+    sidecar -->|ACP| agent[Agent: claude]
 `,
         "33-multi-exchange-topology": `
 flowchart TB
