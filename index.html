@@ -298,25 +298,25 @@
         "why-this-rfc-exists": `
 flowchart LR
     people[People] --> clients[Chat / CLI / IDE]
-    clients --> room[Workspace Room]
-    room --> agents[Agent Sidecars + Agents]
-    room --> resources[Files / Context / Resources]
-    room --> audit[Audit Log]
-    control[Control Plane] --> room
+    clients --> exchange[Workspace Exchange]
+    exchange --> agents[Agent Sidecars + Agents]
+    exchange --> resources[Files / Context / Resources]
+    exchange --> audit[Audit Log]
+    control[Control Plane] --> exchange
     control --> lifecycle[Create / Pause / Resume / Route]
-    room <-->|trusted links| other[Other Workspaces]
+    exchange <-->|trusted links| other[Other Workspaces]
 `,
-        "high-level-room-view": `
+        "high-level-exchange-view": `
 flowchart TB
-    human1[Human User] -->|direct or via bridge| room[Workspace Room]
-    human2[Human Channel] -->|bridge session| room
-    peer[Peer Room / Federated Link] -->|trusted ASP link| room
-    cp[Control Plane] -->|routing + policy + lifecycle| room
+    human1[Human User] -->|direct or via bridge| exchange[Workspace Exchange]
+    human2[Human Channel] -->|bridge session| exchange
+    peer[Peer Exchange / Federated Link] -->|trusted ASP link| exchange
+    cp[Control Plane] -->|routing + policy + lifecycle| exchange
     cp -->|spawn / suspend / resume| rlm[Runtime Lifecycle Manager]
-    room -->|delegated text + signed mandate| sidecar1[Sidecar: agent1]
-    room -->|delegated text + signed mandate| sidecar2[Sidecar: agent2]
-    room -->|resource_call| ers[Environment / Resource Service]
-    room --> audit[Audit Log]
+    exchange -->|delegated text + signed mandate| sidecar1[Sidecar: agent1]
+    exchange -->|delegated text + signed mandate| sidecar2[Sidecar: agent2]
+    exchange -->|resource_call| ers[Environment / Resource Service]
+    exchange --> audit[Audit Log]
     sidecar1 -->|invoke / poll| agent1[Passive Agent 1]
     sidecar2 -->|invoke / poll| agent2[Passive Agent 2]
     rlm -->|spawns + resumes| sidecar1
@@ -338,49 +338,49 @@ flowchart TB
 `,
         "32-workspace-topology-single-workspace": `
 flowchart TB
-    cp[Control Plane] -->|manage lifecycle| room[Room]
-    cli[CLI] -->|ASP| room
-    telegram[Telegram Bridge] -->|ASP| room
-    filebridge[File Mount Bridge] -->|ASP| room
+    cp[Control Plane] -->|manage lifecycle| exchange[Exchange]
+    cli[CLI] -->|ASP| exchange
+    telegram[Telegram Bridge] -->|ASP| exchange
+    filebridge[File Mount Bridge] -->|ASP| exchange
     filebridge --> fuse[FUSE mount at ~/relay/ns/proj]
-    room -->|ASP via attached sidecar| sidecar[Sidecar: claude]
+    exchange -->|ASP via attached sidecar| sidecar[Sidecar: claude]
     sidecar -->|invoke / poll locally| agent[Agent: claude]
 `,
-        "33-multi-room-topology": `
+        "33-multi-exchange-topology": `
 flowchart TB
     cp[Control Plane<br/>Raft cluster]
-    rooma[Room A<br/>ws: myns/myproject]
-    roomb[Room B<br/>ws: myns/infra]
+    exchangea[Exchange A<br/>ws: myns/myproject]
+    exchangeb[Exchange B<br/>ws: myns/infra]
     ag1[ag1]
     ag2[ag2]
     ag3[ag3]
     ag4[ag4]
-    cp -->|push routing tables| rooma
-    cp -->|push routing tables| roomb
-    rooma --> ag1
-    rooma --> ag2
-    roomb --> ag3
-    roomb --> ag4
+    cp -->|push routing tables| exchangea
+    cp -->|push routing tables| exchangeb
+    exchangea --> ag1
+    exchangea --> ag2
+    exchangeb --> ag3
+    exchangeb --> ag4
     ag2 --- ag3
 `,
         "42-connection-lifecycle": `
 sequenceDiagram
     participant P as Participant
-    participant R as Room
+    participant R as Exchange
     P->>R: asp/initialize<br/>protocol_version, role,<br/>participant_info, capabilities, workspace
-    R-->>P: initialize_response<br/>room_info, capabilities,<br/>members, routing_snapshot
+    R-->>P: initialize_response<br/>exchange_info, capabilities,<br/>members, routing_snapshot
     P->>R: asp/ready
     Note over P,R: Bidirectional messaging
 `,
         "49-approval-flow": `
 sequenceDiagram
     participant Requester
-    participant Room
+    participant Exchange
     participant Humans
-    Requester->>Room: operation request
-    Room->>Humans: approval_request<br/>action=mutating resource access, risk=high
-    Humans-->>Room: approval_response<br/>approved=true, approver=user1
-    Room-->>Requester: routed result or policy decision
+    Requester->>Exchange: operation request
+    Exchange->>Humans: approval_request<br/>action=mutating resource access, risk=high
+    Humans-->>Exchange: approval_response<br/>approved=true, approver=user1
+    Exchange-->>Requester: routed result or policy decision
 `,
         "51-state-machine": `
 stateDiagram-v2
@@ -393,44 +393,44 @@ stateDiagram-v2
         "92-message-forwarding-flow": `
 sequenceDiagram
     participant Claude as claude
-    participant RoomA as Room A
-    participant RoomB as Room B
+    participant ExchangeA as Exchange A
+    participant ExchangeB as Exchange B
     participant Infra as infra-agent sidecar
-    Claude->>RoomA: to arl://myns/infra/infra-agent
-    RoomA->>RoomA: lookup local routing table
-    RoomA->>RoomB: forward ASP envelope<br/>source_workspace=myns/myproject<br/>destination_workspace=myns/infra<br/>room_src=room-7a3f ttl=7
-    RoomB->>Infra: deliver local ASP message
+    Claude->>ExchangeA: to agrp://myns/infra/infra-agent
+    ExchangeA->>ExchangeA: lookup local routing table
+    ExchangeA->>ExchangeB: forward ASP envelope<br/>source_workspace=myns/myproject<br/>destination_workspace=myns/infra<br/>exchange_src=exchange-7a3f ttl=7
+    ExchangeB->>Infra: deliver local ASP message
 `,
         "101-intra-organization-federation": `
 flowchart LR
     subgraph A[Cluster: example-mesh]
         cpa[CP-A]
-        rooma1[Room A1]
+        exchangea1[Exchange A1]
         a1[ag1]
         a2[ag2]
-        cpa --> rooma1
-        rooma1 --> a1
-        rooma1 --> a2
+        cpa --> exchangea1
+        exchangea1 --> a1
+        exchangea1 --> a2
     end
     subgraph B[Cluster: personal]
         cpb[CP-B]
-        roomb1[Room B1]
-        roomb2[Room B2]
+        exchangeb1[Exchange B1]
+        exchangeb2[Exchange B2]
         b1[ag3]
         b2[ag4]
         b3[ag5]
-        cpb --> roomb1
-        cpb --> roomb2
-        roomb1 --> b1
-        roomb2 --> b2
-        roomb2 --> b3
+        cpb --> exchangeb1
+        cpb --> exchangeb2
+        exchangeb1 --> b1
+        exchangeb2 --> b2
+        exchangeb2 --> b3
     end
-    rooma1 <-->|ASP| roomb1
+    exchangea1 <-->|ASP| exchangeb1
 `,
         "102-cross-organization-federation-via-a2a": `
 sequenceDiagram
     participant Client as External A2A Client
-    participant Boundary as Boundary Room
+    participant Boundary as Boundary Exchange
     participant Mesh as Internal AGRP Mesh
     Client->>Boundary: GET /.well-known/agent.json
     Boundary-->>Client: proxied Agent Card
