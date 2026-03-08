@@ -70,18 +70,6 @@ ARP is to agent meshes what a telephone switching network is to voice communicat
 
 ---
 
-## Status of This Memo
-
-This document is a working draft for discussion within the Agent Relay Protocol project. It describes a proposed architecture and protocol surface for agent meshes and should not yet be treated as a stable standard.
-
-Sections listed in [13. Open Questions](#13-open-questions) are intentionally unresolved and remain part of the draft scope.
-
-## Copyright Notice
-
-Copyright (c) 2026 Aleksei Kudriashov <akud.soft@gmail.com>
-
----
-
 ## 1. Problem Statement
 
 AI agents increasingly operate in multi-agent, multi-human systems. Several protocols have emerged to address different layers of the agentic stack, most now maturing under open governance. However, none define a **switching fabric** — a managed infrastructure where agents and humans are organized into workspaces, connected by routable topology, with lifecycle management, audit, and multi-client access.
@@ -389,19 +377,17 @@ For same-workspace traffic bound to a single session workspace, `source_workspac
 |---|---|---|
 | `text` | any → any | Targeted plain text or markdown message |
 | `room_message` | human/bridge → room | Untargeted human message appended to room history and not delivered to agents |
-| `tool_call` | agent → room | Agent-declared local operation proposal for approval, routing, or audit; not executed by the Room |
-| `tool_result` | agent → room | Result of a tool operation executed by the agent through its local sidecar/ACP environment |
 | `resource_call` | human/agent → room | Direct resource request routed by the Room to the Environment/Resource service |
 | `resource_result` | room → requester | Final or single response for a direct resource request |
 | `resource_chunk` | room → requester | Streaming chunk for a direct resource request when workspace policy enables streaming |
 | `resource_end` | room → requester | Explicit end-of-stream marker for a streamed direct resource request |
-| `approval_request` | agent → role:human | Request for human approval with risk level and action description |
-| `approval_response` | human → agent | Approve or deny, with approver identity |
+| `approval_request` | agent/room → role:human | Request for human approval with risk level and action description |
+| `approval_response` | human → agent/room | Approve or deny, with approver identity |
 | `delivery_failure` | room → original sender | Explicit notice that delivery or forwarding failed |
 | `session_event` | room → all | Participant joined, left, or changed status |
 | `routing_update` | cp → room | Routing table push (Control Plane to Room only) |
 
-The `payload` field carries type-specific content. ARP routes all types identically — the type field exists for client rendering and policy enforcement, not for routing decisions. ARP sits above ACP and local tool execution; Rooms do not execute `tool_call` operations themselves. For `resource_call`, the Room acts as a policy-enforcing proxy to the Environment/Resource service.
+The `payload` field carries type-specific content. ARP routes all types identically — the type field exists for client rendering and policy enforcement, not for routing decisions. ARP does not define low-level agent execution contracts such as tool invocation or tool result messages. For `resource_call`, the Room acts as a policy-enforcing proxy to the Environment/Resource service.
 
 ### 4.5 Broadcast and Fan-out
 
@@ -448,23 +434,20 @@ If a Room cannot route or deliver a message because of missing routes, insuffici
 
 ### 4.9 Approval Flow
 
-Tool operations follow a structured approval flow routed through the Room:
+Operations that require human approval follow a structured flow routed through the Room:
 
 ```
 Agent                    Room                    Humans
   |                        |                        |
   |─ approval_request ───→|                        |
-  |  { action: "shell",   |─ fan-out to ──────────→|
-  |    command: "bun test",|  role:human             |
-  |    risk: "low" }       |                        |
+  |  { action: "mutating  |─ fan-out to ──────────→|
+  |    resource access",  |  role:human             |
+  |    risk: "high" }     |                        |
   |                        |                        |
   |                        |←── approval_response ──|
   |                        |    { approved: true,    |
   |←── approval_response ──|      approver: "itbaron" }
   |    (routed back)       |                        |
-  |                        |                        |
-  |─ tool_result ────────→|─ fan-out to ──────────→|
-  |  { status: "success" } |  role:human             |
 ```
 
 The Room enforces workspace-level approval policy:
@@ -474,6 +457,8 @@ The Room enforces workspace-level approval policy:
 - **How many approvals** — single approver or quorum (configurable per workspace)
 
 The approval policy is workspace metadata managed by the Control Plane. The Room enforces it; the agent proposes operations without knowledge of the policy.
+
+Any follow-up execution or completion reporting happens through normal ARP messages such as `text` or `resource_result`, or through implementation-specific agent-local contracts outside ARP.
 
 For cross-workspace operations in v1, approval is governed by the **source workspace** policy. The destination Room trusts the forwarded approval decision if the inter-Room link negotiated the required trust claim during connection setup.
 
@@ -697,17 +682,16 @@ Every Room writes messages to an append-only audit log persisted by the Control 
 An implementation may expose the audit log through a CLI, API, or UI. An illustrative excerpt:
 
 ```
-14:01  itbaron    "review the project, what's the stack"
-14:02  claude     Analyzed structure, 4 packages
-14:05  itbaron    "add zod schemas for all endpoints"
-14:12  claude     fs.write schemas.ts, validate.ts (approved by: itbaron)
-14:12  claude     ✓ bun test — 53/53 (approved by: itbaron)
-14:30  it-baron   "add rate limiting to POST endpoints"
-14:35  claude     fs.write rate-limit.ts (approved by: it-baron)
-15:01  itbaron    "deploy to staging"
-15:02  claude     ✓ fly deploy (approved by: it-baron)
-15:10  itbaron    "commit and create a PR"
-15:11  claude     ✓ PR #28 created (approved by: itbaron)
+14:01  itbaron    "review the current architecture"
+14:02  claude     "summarized the topology and open questions"
+14:05  itbaron    "prepare an update for the validation rules"
+14:09  claude     "draft update ready for review"
+14:15  it-baron   "connect a Telegram channel to this workspace"
+14:16  system     session_event telegram-bridge-01 joined
+14:30  claude     approval_request "mutating resource access"
+14:31  it-baron   approval_response approved
+15:10  itbaron    "delegate follow-up work to infra-agent"
+15:11  room       delivery_failure route unavailable
 ```
 
 The audit log persists across suspend and resume for human review, debugging, and tooling. It is not the protocol-defined recovery mechanism for agent state in v1.

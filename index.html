@@ -341,12 +341,10 @@ sequenceDiagram
     participant Agent
     participant Room
     participant Humans
-    Agent->>Room: approval_request<br/>action=shell, command=bun test, risk=low
+    Agent->>Room: approval_request<br/>action=mutating resource access, risk=high
     Room->>Humans: fan-out to role:human
     Humans-->>Room: approval_response<br/>approved=true, approver=itbaron
     Room-->>Agent: approval_response
-    Agent->>Room: tool_result<br/>status=success
-    Room->>Humans: fan-out tool_result
 `,
         "51-state-machine": `
 stateDiagram-v2
