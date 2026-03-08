@@ -5,8 +5,8 @@ Repository for the draft Agent Relay Protocol (AGRP) specification, written as a
 The main document is [agrp-rfc.md](./agrp-rfc.md). It describes:
 
 - the gap between MCP, ACP, A2A, and repository-level agent guidance
-- Exchanges, Realms, Client Bridges, the Control Plane, and the Runtime Lifecycle Manager
-- ASP, the session protocol used for participant-to-Exchange and Exchange-to-Exchange communication
+- Exchanges, Realms, AGSP Bridges, the Control Plane, and the Agent Runtime Lifecycle Manager
+- AGSP, the session protocol used for participant-to-Exchange and Exchange-to-Exchange communication
 - realm lifecycle, routing, audit logging, federation, and open specification questions
 
 ## Repository Layout

@@ -310,40 +310,40 @@ flowchart LR
 flowchart TB
     human1[Human User] -->|direct or via bridge| exchange[Realm Exchange]
     human2[Human Channel] -->|bridge session| exchange
-    peer[Peer Exchange / Federated Link] -->|trusted ASP link| exchange
+    peer[Peer Exchange / Federated Link] -->|trusted AGSP link| exchange
     cp[Control Plane] -->|routing + policy + lifecycle| exchange
-    cp -->|spawn / suspend / resume| rlm[Runtime Lifecycle Manager]
+    cp -->|spawn / suspend / resume| arlm[Agent Runtime Lifecycle Manager]
     exchange -->|delegated text + signed mandate| sidecar1[Sidecar: agent1]
     exchange -->|delegated text + signed mandate| sidecar2[Sidecar: agent2]
     exchange -->|resource_call| ers[Environment / Resource Service]
     exchange --> audit[Audit Log]
     sidecar1 -->|invoke / poll| agent1[Passive Agent 1]
     sidecar2 -->|invoke / poll| agent2[Passive Agent 2]
-    rlm -->|spawns + resumes| sidecar1
-    rlm -->|spawns + resumes| sidecar2
-    rlm -->|provisions| ers
+    arlm -->|spawns + resumes| sidecar1
+    arlm -->|spawns + resumes| sidecar2
+    arlm -->|provisions| ers
 `,
         "13-position-in-the-agentic-stack": `
 flowchart TB
     app[Application Layer<br/>Agent business logic and task orchestration]
     a2a[A2A<br/>Agent-to-agent collaboration]
     arp[AGRP<br/>Switching Fabric + Realms]
-    asp[ASP<br/>JSON-RPC sessions and envelopes]
+    agsp[AGSP<br/>JSON-RPC sessions and envelopes]
     transport[Transport<br/>gRPC / WebSocket / TCP]
     mcp[MCP<br/>Tool and Data Access]
     acp[ACP<br/>Editor Integration]
-    app --> a2a --> arp --> asp --> transport
+    app --> a2a --> arp --> agsp --> transport
     mcp -. orthogonal .-> arp
     acp -. orthogonal .-> arp
 `,
         "32-realm-topology-single-realm": `
 flowchart TB
     cp[Control Plane] -->|manage lifecycle| exchange[Exchange]
-    cli[CLI] -->|ASP| exchange
-    telegram[Telegram Bridge] -->|ASP| exchange
-    filebridge[File Mount Bridge] -->|ASP| exchange
+    cli[CLI] -->|AGSP| exchange
+    telegram[Telegram Bridge] -->|AGSP| exchange
+    filebridge[File Mount Bridge] -->|AGSP| exchange
     filebridge --> fuse[FUSE mount at ~/relay/ns/proj]
-    exchange -->|ASP via attached sidecar| sidecar[Sidecar: claude]
+    exchange -->|AGSP via attached sidecar| sidecar[Sidecar: claude]
     sidecar -->|invoke / poll locally| agent[Agent: claude]
 `,
         "33-multi-exchange-topology": `
@@ -367,9 +367,9 @@ flowchart TB
 sequenceDiagram
     participant P as Participant
     participant R as Exchange
-    P->>R: asp/initialize<br/>protocol_version, role,<br/>participant_info, capabilities, realm
+    P->>R: agsp/initialize<br/>protocol_version, role,<br/>participant_info, capabilities, realm
     R-->>P: initialize_response<br/>exchange_info, capabilities,<br/>members, routing_snapshot
-    P->>R: asp/ready
+    P->>R: agsp/ready
     Note over P,R: Bidirectional messaging
 `,
         "49-approval-flow": `
@@ -398,8 +398,8 @@ sequenceDiagram
     participant Infra as infra-agent sidecar
     Claude->>ExchangeA: to agrp://myns/infra/infra-agent
     ExchangeA->>ExchangeA: lookup local routing table
-    ExchangeA->>ExchangeB: forward ASP envelope<br/>source_realm=myns/myproject<br/>destination_realm=myns/infra<br/>exchange_src=exchange-7a3f ttl=7
-    ExchangeB->>Infra: deliver local ASP message
+    ExchangeA->>ExchangeB: forward AGSP envelope<br/>source_realm=myns/myproject<br/>destination_realm=myns/infra<br/>exchange_src=exchange-7a3f ttl=7
+    ExchangeB->>Infra: deliver local AGSP message
 `,
         "101-intra-organization-federation": `
 flowchart LR
@@ -425,7 +425,7 @@ flowchart LR
         exchangeb2 --> b2
         exchangeb2 --> b3
     end
-    exchangea1 <-->|ASP| exchangeb1
+    exchangea1 <-->|AGSP| exchangeb1
 `,
         "102-cross-organization-federation-via-a2a": `
 sequenceDiagram
@@ -435,8 +435,8 @@ sequenceDiagram
     Client->>Boundary: GET /.well-known/agent.json
     Boundary-->>Client: proxied Agent Card
     Client->>Boundary: POST /tasks
-    Boundary->>Mesh: wrap in ASP envelope and route internally
-    Mesh-->>Boundary: internal ASP response
+    Boundary->>Mesh: wrap in AGSP envelope and route internally
+    Mesh-->>Boundary: internal AGSP response
     Boundary-->>Client: proxied A2A response
 `,
       };

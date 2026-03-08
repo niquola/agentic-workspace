@@ -39,30 +39,30 @@ Without AGRP, the current protocol stack solves individual links such as editor-
 
 ## High-Level Exchange View
 
-At runtime, AGRP centers work around an Exchange. Humans and bridges connect to the Exchange, the Control Plane and RLM manage lifecycle around it, and every agent is represented through a 1:1 attached sidecar. The sidecar speaks ASP, receives delegated requests plus signed mandates, and invokes or polls the passive agent locally.
+At runtime, AGRP centers work around an Exchange. Humans and bridges connect to the Exchange, the Control Plane and ARLM manage lifecycle around it, and every agent is represented through a 1:1 attached sidecar. The sidecar speaks AGSP, receives delegated requests plus signed mandates, and invokes or polls the passive agent locally.
 
 ```
  [Human User] ------------------------------------------\
  [Human Channel] -- bridge session ---------------------+--> [Realm Exchange] --> [Audit Log]
- [Peer Exchange / Federated Link] -- trusted ASP link -----/
+ [Peer Exchange / Federated Link] -- trusted AGSP link -----/
 
  [Control Plane] -- routing + policy + lifecycle -----> [Realm Exchange]
- [Control Plane] -- spawn / suspend / resume ---------> [Runtime Lifecycle Manager]
+ [Control Plane] -- spawn / suspend / resume ---------> [Agent Runtime Lifecycle Manager]
 
  [Realm Exchange] -- delegated text + signed mandate -> [Sidecar: agent1] -- invoke / poll -> [Passive Agent 1]
  [Realm Exchange] -- delegated text + signed mandate -> [Sidecar: agent2] -- invoke / poll -> [Passive Agent 2]
  [Realm Exchange] -- resource_call -------------------> [Environment / Resource Service]
 
- [Runtime Lifecycle Manager] -- spawns + resumes -----> [Sidecar: agent1]
- [Runtime Lifecycle Manager] -- spawns + resumes -----> [Sidecar: agent2]
- [Runtime Lifecycle Manager] -- provisions -----------> [Environment / Resource Service]
+ [Agent Runtime Lifecycle Manager] -- spawns + resumes -----> [Sidecar: agent1]
+ [Agent Runtime Lifecycle Manager] -- spawns + resumes -----> [Sidecar: agent2]
+ [Agent Runtime Lifecycle Manager] -- provisions -----------> [Environment / Resource Service]
 ```
 
 ---
 
 ## Abstract
 
-This document specifies the Agent Relay Protocol (AGRP), a switching fabric and realm infrastructure for autonomous agent meshes. AGRP defines how agents, humans, and client bridges connect to Realms; how Exchanges relay messages between participants; how a Control Plane manages topology, realm lifecycle, and routing state; and how inter-Exchange communication enables multi-hop meshes.
+This document specifies the Agent Relay Protocol (AGRP), a switching fabric and realm infrastructure for autonomous agent meshes. AGRP defines how agents, humans, and AGSP bridges connect to Realms; how Exchanges relay messages between participants; how a Control Plane manages topology, realm lifecycle, and routing state; and how inter-Exchange communication enables multi-hop meshes.
 
 AGRP operates at the **communication and infrastructure layer** — below the semantics of agent collaboration (A2A) and above the mechanics of tool access (MCP) and editor integration (ACP). It provides the managed topology, realm lifecycle, and message routing that these protocols do not address.
 
@@ -108,7 +108,7 @@ MCP connects agents to tools. ACP connects editors to agents. A2A enables agent-
 │  AGRP — Switching Fabric + Realms            │
 │  (Exchanges, routing, lifecycle, audit)  ◄── THIS   │
 ├─────────────────────────────────────────────────┤
-│  ASP — AGRP Session Protocol                     │
+│  AGSP — AGRP Session Protocol                     │
 │  (JSON-RPC sessions, envelopes, heartbeat)       │
 ├─────────────────────────────────────────────────┤
 │  Transport (gRPC / WebSocket / TCP)             │
@@ -126,35 +126,35 @@ MCP connects agents to tools. ACP connects editors to agents. A2A enables agent-
 
 An agent is a logical autonomous worker addressed by name within the mesh; resolution is handled by the Exchange and Control Plane.
 
-In AGRP v1, every agent participates through a **1:1 attached sidecar** that connects to the Exchange, invokes or polls the agent through a local adapter, and emits ASP messages on the agent's behalf. The sidecar is an implementation detail of the agent runtime and is not exposed to users as a separate participant identity.
+In AGRP v1, every agent participates through a **1:1 attached sidecar** that connects to the Exchange, invokes or polls the agent through a local adapter, and emits AGSP messages on the agent's behalf. The sidecar is an implementation detail of the agent runtime and is not exposed to users as a separate participant identity.
 
-An agent is instantiated with a **harness** — a configuration bundle specifying the model, provider, tools, skills, and behavioral constraints. The harness is opaque to the protocol; AGRP treats it as metadata stored in the Control Plane and passed to the Runtime Lifecycle Manager at spawn time.
+An agent is instantiated with a **harness** — a configuration bundle specifying the model, provider, tools, skills, and behavioral constraints. The harness is opaque to the protocol; AGRP treats it as metadata stored in the Control Plane and passed to the Agent Runtime Lifecycle Manager at spawn time.
 
 Agents may use ACP, MCP, A2A, or other local execution interfaces through their sidecar/runtime adapter. AGRP is concerned only with routing, policy, and realm topology, not with how the agent executes its local work.
 
 ### 2.1.1 Agent Sidecar
 
-An agent sidecar is a child transport adapter managed alongside exactly one agent by the RLM or realm runtime. The sidecar:
+An agent sidecar is a child transport adapter managed alongside exactly one agent by the ARLM or realm runtime. The sidecar:
 
-- Terminates ASP on behalf of its parent agent
-- Translates between ASP and the agent's local interface (ACP, stdio, HTTP, SDK, queue, or similar)
+- Terminates AGSP on behalf of its parent agent
+- Translates between AGSP and the agent's local interface (ACP, stdio, HTTP, SDK, queue, or similar)
 - Invokes or polls the agent and returns replies, protocol-level requests that need Exchange mediation, and failures
 - Verifies received signed mandates and enforces them locally on delegated requests
 
-Agents do not send unsolicited ASP protocol messages in v1. They reply only when invoked or polled by their sidecar.
+Agents do not send unsolicited AGSP protocol messages in v1. They reply only when invoked or polled by their sidecar.
 
 ### 2.2 Exchange
 
 An Exchange is a process or pod that acts as a **switching node** in the mesh. It is the fundamental routing unit of the AGRP fabric. An Exchange:
 
-- Accepts ASP connections from agent sidecars, humans, client bridges, and peer Exchanges
+- Accepts AGSP connections from agent sidecars, humans, AGSP bridges, and peer Exchanges
 - Maintains a local routing table pushed by the Control Plane
 - Forwards messages to local participants or to peer Exchanges
 - Broadcasts messages within a realm according to fan-out rules
 - Persists messages to an append-only audit log
-- Is itself an ASP participant — it can join other Exchanges as a peer
+- Is itself an AGSP participant — it can join other Exchanges as a peer
 
-This last property is the key architectural insight: **Exchange-to-Exchange communication uses the same ASP protocol as any other participant connection**. There is no separate inter-Exchange protocol. An Exchange joins another Exchange exactly as any external participant would, enabling recursive composition.
+This last property is the key architectural insight: **Exchange-to-Exchange communication uses the same AGSP protocol as any other participant connection**. There is no separate inter-Exchange protocol. An Exchange joins another Exchange exactly as any external participant would, enabling recursive composition.
 
 ### 2.3 Realm
 
@@ -164,25 +164,25 @@ A Realm is the primary user-facing abstraction in AGRP. It is a **managed collab
 - **An Environment Resource Service** — an abstract provider of context, environment resources, and realm information
 - **Agents** — one or more, each with a harness and model configuration
 - **Members** — humans with roles (owner, admin, member) and permissions
-- **Channels** — bindings to external systems (Telegram threads, Slack channels, etc.) via client bridges
+- **Channels** — bindings to external systems (Telegram threads, Slack channels, etc.) via AGSP bridges
 - **Audit log** — append-only record of all messages, approvals, and operations
 
 A Realm has a hierarchical identifier: `{namespace}/{name}` (e.g., `myns/myproject`). Realms are managed by the Control Plane and have a defined lifecycle: `creating → running → suspended → running → terminated`.
 
 The relationship between Realm and Exchange: a Realm always has exactly one Exchange. The Exchange handles switching; the Realm provides identity, state, and lifecycle. Multiple Realms may run on the same physical infrastructure but their Exchanges are logically isolated. This RFC intentionally keeps the environment model abstract; concrete resource schemas are left to a separate companion Environment/Resource RFC.
 
-### 2.4 Client Bridge
+### 2.4 AGSP Bridge
 
-A Client Bridge is an ASP participant that translates between an external protocol and ASP. From the Exchange's perspective, a bridge is just another participant — the Exchange does not know or care that it is backed by Telegram, Slack, or any other system.
+An AGSP Bridge is an AGSP participant that translates between an external protocol and AGSP. From the Exchange's perspective, a bridge is just another participant — the Exchange does not know or care that it is backed by Telegram, Slack, or any other system.
 
 Examples:
 
-| Bridge | External Protocol | ASP Role |
+| Bridge | External Protocol | AGSP Role |
 |---|---|---|
 | Telegram Bridge | Telegram Bot API (thread-bound) | `bridge` |
 | Slack Bridge | Slack Events API (channel-bound) | `bridge` |
-| CLI Client | Native ASP over WebSocket | `human` (direct, no bridge needed) |
-| IDE / File Mount | FUSE + ASP sidecar | `bridge` |
+| CLI Client | Native AGSP over WebSocket | `human` (direct, no bridge needed) |
+| IDE / File Mount | FUSE + AGSP sidecar | `bridge` |
 
 A bridge registers with the Exchange using role `bridge` and declares metadata about the external channel it represents. Messages flowing through a bridge carry the original author's identity, not the bridge's.
 
@@ -193,13 +193,13 @@ The Control Plane is a Raft-replicated cluster responsible for:
 - **Realm lifecycle** — create, suspend, resume, terminate realms
 - **Topology management** — tracking all Exchanges, agents, bridges, and inter-Exchange links
 - **Routing state distribution** — pushing routing tables to Exchanges via xDS-style streaming
-- **Agent lifecycle** — managing spawn/terminate of agents and their attached sidecars via the Runtime Lifecycle Manager
+- **Agent lifecycle** — managing spawn/terminate of agents and their attached sidecars via the Agent Runtime Lifecycle Manager
 - **Membership and authorization** — enforcing realm-local roles (`owner`, `admin`, `member`) and optional opaque IAM payloads on sessions and mandates
 - **Cluster federation** — managing inter-cluster links for mesh-of-meshes
 
 The Control Plane is **not** in the data path. It configures routing state, but message forwarding happens directly between Exchanges. If the Control Plane becomes temporarily unavailable, Exchanges continue forwarding using their last known routing state — providing **fault tolerance by design**. Base authorization in AGRP is realm-local; deployments may attach opaque IAM payloads to sessions and mandates for policy enrichment, but this RFC does not standardize their schema. Direct resource targeting is restricted to `owner` and `admin` members in base AGRP and is proxied by the Exchange to the Environment/Resource service.
 
-### 2.6 Runtime Lifecycle Manager (RLM)
+### 2.6 Agent Runtime Lifecycle Manager (ARLM)
 
 An abstraction over execution environments (Kubernetes, native-fork, serverless, etc.) that the Control Plane uses to:
 
@@ -207,7 +207,7 @@ An abstraction over execution environments (Kubernetes, native-fork, serverless,
 - Provision and destroy environment resources
 - Suspend and resume environment/resource handles
 
-The RLM is pluggable — the protocol is agnostic to the underlying runtime. The RLM connects to Exchanges as an ASP participant with role `rlm`.
+The ARLM is pluggable — the protocol is agnostic to the underlying runtime. The ARLM connects to Exchanges as an AGSP participant with role `arlm`.
 
 ---
 
@@ -220,8 +220,8 @@ AGRP defines three planes:
 | Plane | Components | Analogy |
 |---|---|---|
 | **Orchestration Plane** | Control Plane (Raft) | k8s API Server + etcd |
-| **Switching Fabric** | Exchanges + ASP relay + Bridges | kube-proxy + CNI |
-| **Runtime Plane** | RLM (k8s, fork, etc.) + Agents + Sidecars + Environment Resources | kubelet + container runtime |
+| **Switching Fabric** | Exchanges + AGSP relay + Bridges | kube-proxy + CNI |
+| **Runtime Plane** | ARLM (k8s, fork, etc.) + Agents + Sidecars + Environment Resources | kubelet + container runtime |
 
 ### 3.2 Realm Topology (Single Realm)
 
@@ -232,14 +232,14 @@ A typical realm with CLI, Telegram, and a single agent:
                           |
                     manage lifecycle
                           |
- [CLI] ── ASP ──→ [  Exchange  ] ←── ASP ── [Telegram Bridge]
+ [CLI] ── AGSP ──→ [  Exchange  ] ←── AGSP ── [Telegram Bridge]
                       ↑   ↑                |
                       |   |                |
-                      |   +──── ASP ── [File Mount Bridge]
+                      |   +──── AGSP ── [File Mount Bridge]
                       |                     |
                       |               [FUSE → ~/relay/ns/proj]
                       |
-                   ASP via
+                   AGSP via
                  attached sidecar
                       |
                [Sidecar: claude]
@@ -249,7 +249,7 @@ A typical realm with CLI, Telegram, and a single agent:
                 [Agent: claude]
 ```
 
-All external Exchange edges in this example are ASP sessions. The agent process is not. The Exchange talks to the agent through its attached sidecar, and the sidecar invokes or polls the local agent. When the agent produces a reply, the sidecar emits the corresponding ASP message and the Exchange fans it out to CLI and both bridges. When a human types in the Telegram thread, the bridge forwards it as an ASP message attributed to that human; if the message has no explicit agent target, the Exchange stores it as a `exchange_message`.
+All external Exchange edges in this example are AGSP sessions. The agent process is not. The Exchange talks to the agent through its attached sidecar, and the sidecar invokes or polls the local agent. When the agent produces a reply, the sidecar emits the corresponding AGSP message and the Exchange fans it out to CLI and both bridges. When a human types in the Telegram thread, the bridge forwards it as an AGSP message attributed to that human; if the message has no explicit agent target, the Exchange stores it as a `exchange_message`.
 
 ### 3.3 Multi-Exchange Topology
 
@@ -281,11 +281,11 @@ Exchanges forward messages autonomously using their local table. If the Control 
 
 ---
 
-## 4. AGRP Session Protocol (ASP)
+## 4. AGRP Session Protocol (AGSP)
 
 ### 4.1 Design Principles
 
-ASP is AGRP's native session protocol. It is a bidirectional JSON-RPC 2.0 protocol that runs over gRPC, WebSocket, or raw TCP. ASP is purpose-built for Exchange-based switching with:
+AGSP is AGRP's native session protocol. It is a bidirectional JSON-RPC 2.0 protocol that runs over gRPC, WebSocket, or raw TCP. AGSP is purpose-built for Exchange-based switching with:
 
 - **Connection initialization** with capability negotiation
 - **Session multiplexing** — multiple logical sessions over one connection
@@ -294,16 +294,16 @@ ASP is AGRP's native session protocol. It is a bidirectional JSON-RPC 2.0 protoc
 - **Streaming notifications** for routing table updates and session events
 - **Heartbeat and liveness** detection
 
-ASP borrows design principles from ACP (JSON-RPC 2.0, capability negotiation, streaming updates) and A2A (HTTP/gRPC transport, structured task messages), but is purpose-built for relay semantics. Neither ACP nor A2A support multi-hop forwarding, routing tables, or Exchange-based switching.
+AGSP borrows design principles from ACP (JSON-RPC 2.0, capability negotiation, streaming updates) and A2A (HTTP/gRPC transport, structured task messages), but is purpose-built for relay semantics. Neither ACP nor A2A support multi-hop forwarding, routing tables, or Exchange-based switching.
 
-This document provides the architectural and behavioral model for ASP. The normative method catalog, error codes, and wire schemas are intended to live in a separate companion ASP RFC.
+This document provides the architectural and behavioral model for AGSP. The normative method catalog, error codes, and wire schemas are intended to live in a separate companion AGSP RFC.
 
 ### 4.2 Connection Lifecycle
 
 ```
 Participant                          Exchange
     |                                  |
-    |─── asp/initialize ─────────────→|
+    |─── agsp/initialize ─────────────→|
     |    { protocol_version,           |
     |      role,                       |
     |      participant_info,           |
@@ -316,7 +316,7 @@ Participant                          Exchange
     |      members,                    |
     |      routing_snapshot }          |
     |                                  |
-    |─── asp/ready ──────────────────→|
+    |─── agsp/ready ──────────────────→|
     |                                  |
     |⇐⇒  Bidirectional messaging  ⇐⇒ |
 ```
@@ -329,9 +329,9 @@ The `role` field indicates participant type:
 | `human` | Human user (direct CLI/WebSocket connection) |
 | `bridge` | Client bridge translating an external protocol |
 | `exchange` | Peer Exchange (inter-Exchange link) |
-| `rlm` | Runtime Lifecycle Manager |
+| `arlm` | Agent Runtime Lifecycle Manager |
 
-Exchanges treat all roles uniformly for message forwarding. The role is metadata for fan-out rules, observability, and authorization policy — not routing. The attached sidecar is modeled as an internal child session, but the Exchange projects it as the parent logical `agent` participant. Because every agent is sidecar-backed in AGRP v1, transport-mode negotiation is not required in ASP session setup.
+Exchanges treat all roles uniformly for message forwarding. The role is metadata for fan-out rules, observability, and authorization policy — not routing. The attached sidecar is modeled as an internal child session, but the Exchange projects it as the parent logical `agent` participant. Because every agent is sidecar-backed in AGRP v1, transport-mode negotiation is not required in AGSP session setup.
 
 ### 4.3 Message Envelope
 
@@ -340,7 +340,7 @@ All messages routed through AGRP use a common envelope:
 ```json
 {
   "jsonrpc": "2.0",
-  "method": "asp/message",
+  "method": "agsp/message",
   "params": {
     "id": "msg-uuid-001",
     "from": "user1",
@@ -370,7 +370,7 @@ Fields:
 | `ttl` | yes | Time-to-live, decremented at each Exchange hop. Dropped at 0. |
 | `payload` | yes | Opaque to AGRP. Application-level content. |
 
-For same-realm traffic bound to a single session realm, `source_realm` and `destination_realm` MAY be omitted. When omitted, the Exchange resolves both values from the session realm context. For cross-realm traffic, both fields MUST be present. During inter-Exchange forwarding, `exchange_src` MUST be present and identify the forwarding Exchange that placed the envelope on the current Exchange-to-Exchange hop. ASP field names shown in this RFC use `snake_case`. At minimum, a signed `mandate` binds the subject, realm, resource scope, and expiry, where scope is either an explicit resource set or `*` for all resources in scope. Related `resource_call`, `resource_chunk`, `resource_result`, `resource_end`, and approval messages reuse the same `correlation_id`.
+For same-realm traffic bound to a single session realm, `source_realm` and `destination_realm` MAY be omitted. When omitted, the Exchange resolves both values from the session realm context. For cross-realm traffic, both fields MUST be present. During inter-Exchange forwarding, `exchange_src` MUST be present and identify the forwarding Exchange that placed the envelope on the current Exchange-to-Exchange hop. AGSP field names shown in this RFC use `snake_case`. At minimum, a signed `mandate` binds the subject, realm, resource scope, and expiry, where scope is either an explicit resource set or `*` for all resources in scope. Related `resource_call`, `resource_chunk`, `resource_result`, `resource_end`, and approval messages reuse the same `correlation_id`.
 
 ### 4.4 Message Types
 
@@ -412,7 +412,7 @@ Direct resource targeting uses `resource://namespace/realm/resource` URIs. For h
 
 ### 4.6 Delegation
 
-Delegation is not a separate ASP primitive. A client or bridge delegates by sending a normal `text` message whose `to` field is a specific agent URI such as `agrp://myns/myproject/claude`.
+Delegation is not a separate AGSP primitive. A client or bridge delegates by sending a normal `text` message whose `to` field is a specific agent URI such as `agrp://myns/myproject/claude`.
 
 Delegation carries only the selected message content, not an implicit reference to prior exchange history. Delegation targets a single agent, and the base realm default is that any member may delegate unless the realm policy overrides it.
 
@@ -510,9 +510,9 @@ Creating a realm requires an identity, an initial membership set, an agent harne
 The Control Plane:
 
 1. Allocates realm identity `myns/myproject`
-2. Instructs the RLM to provision environment resources and context handles
+2. Instructs the ARLM to provision environment resources and context handles
 3. Spawns an Exchange for the realm
-4. Instructs the RLM to spawn the agent with the specified harness and model, together with its attached sidecar
+4. Instructs the ARLM to spawn the agent with the specified harness and model, together with its attached sidecar
 5. Registers the creator as `owner`
 6. Updates routing tables
 
@@ -526,13 +526,13 @@ The new session is established by the attached sidecar, not by the agent process
 
 ### 5.4 Channels
 
-A realm can have multiple channel bindings, each backed by a client bridge. A binding records the external protocol, bridge instance, and an opaque external resource reference such as a thread, channel, or conversation identifier.
+A realm can have multiple channel bindings, each backed by an AGSP bridge. A binding records the external protocol, bridge instance, and an opaque external resource reference such as a thread, channel, or conversation identifier.
 
 The Control Plane:
 
 1. Registers the channel binding metadata
 2. Spawns or configures a Telegram Bridge process
-3. The bridge opens an ASP session to the realm's Exchange
+3. The bridge opens an AGSP session to the realm's Exchange
 4. Messages in the Telegram thread flow bidirectionally through the bridge
 
 A realm can have multiple channels simultaneously. Each channel binding maps a specific external resource (thread, channel, conversation) to the realm. The binding is 1:1 — one external thread maps to exactly one realm.
@@ -664,7 +664,7 @@ When agent `claude` in `myns/myproject` needs to reach `infra-agent` in `myns/in
 
 1. Claude sends: `{ to: "agrp://myns/infra/infra-agent", payload: ... }`
 2. Exchange A looks up routing table: `agrp://myns/infra/infra-agent → via exchange-9b2c`
-3. Exchange A forwards via its ASP session with Exchange B
+3. Exchange A forwards via its AGSP session with Exchange B
 4. Exchange B delivers locally to `infra-agent`
 
 The Control Plane pre-provisions remote routes keyed by the canonical agent URI. Exchanges do not perform implicit cross-realm resolution from simple names.
@@ -709,9 +709,9 @@ The audit log persists across suspend and resume for human review, debugging, an
 
 ## 9. Exchange-to-Exchange Communication
 
-### 9.1 Exchanges as ASP Participants
+### 9.1 Exchanges as AGSP Participants
 
-The defining property of AGRP is that **an Exchange is an ASP participant**. Exchange B joins Exchange A exactly as any other participant would. From Exchange A's perspective, there is no difference between a human user, a peer Exchange, or the RLM; all are participants with ASP sessions. An agent reaches the Exchange through its attached sidecar but is represented to the Exchange as the logical `agent` participant. This unification eliminates the need for a separate inter-Exchange protocol and enables recursive composition.
+The defining property of AGRP is that **an Exchange is an AGSP participant**. Exchange B joins Exchange A exactly as any other participant would. From Exchange A's perspective, there is no difference between a human user, a peer Exchange, or the ARLM; all are participants with AGSP sessions. An agent reaches the Exchange through its attached sidecar but is represented to the Exchange as the logical `agent` participant. This unification eliminates the need for a separate inter-Exchange protocol and enables recursive composition.
 
 ### 9.2 Message Forwarding Flow
 
@@ -721,22 +721,22 @@ When `claude` in Exchange A sends a message to `infra-agent` in Exchange B:
 1. claude sends:    { to: "agrp://myns/infra/infra-agent", payload: ... }
 2. Exchange A looks up local routing table
 3. Table says:      agrp://myns/infra/infra-agent → Exchange B
-4. Exchange A forwards via its ASP session with Exchange B:
+4. Exchange A forwards via its AGSP session with Exchange B:
    { from: "claude", to: "agrp://myns/infra/infra-agent",
      source_realm: "myns/myproject",
      destination_realm: "myns/infra",
      exchange_src: "exchange-7a3f", ttl: 7, payload: ... }
-5. Exchange B receives and delivers to infra-agent's attached sidecar as a local ASP message
+5. Exchange B receives and delivers to infra-agent's attached sidecar as a local AGSP message
 ```
 
-The envelope carries `exchange_src` for traceability. Agents interact only with their local Exchange via standard ASP.
+The envelope carries `exchange_src` for traceability. Agents interact only with their local Exchange via standard AGSP.
 
 ### 9.3 Inter-Exchange Link Lifecycle
 
 Inter-Exchange links are provisioned by the Control Plane **before** traffic flows (pre-provisioned routing). The Control Plane:
 
 1. Determines required Exchange-to-Exchange links based on agent placement
-2. Instructs Exchange B to open an ASP session to Exchange A
+2. Instructs Exchange B to open an AGSP session to Exchange A
 3. During session initialization, the Exchanges negotiate accepted per-capability trust claims
 4. Pushes routing entries to both Exchanges
 5. Monitors link health and re-provisions on failure
@@ -751,7 +751,7 @@ Cross-realm `resource_call` follows a stricter rule: it is allowed only across t
 
 ## 10. Mesh of Meshes (Federation)
 
-Because Exchanges are ASP participants, the same model extends to federation across clusters and organizations.
+Because Exchanges are AGSP participants, the same model extends to federation across clusters and organizations.
 
 ### 10.1 Intra-Organization Federation
 
@@ -761,13 +761,13 @@ Multiple clusters within the same organization are federated by linking boundary
 [Cluster: example-mesh]           [Cluster: personal]
   [CP-A]                            [CP-B]
     |                                  |
-  [Exchange A1] ←── ASP ──→ [Exchange B1]  [Exchange B2]
+  [Exchange A1] ←── AGSP ──→ [Exchange B1]  [Exchange B2]
     ag1  ag2               ag3     ag4  ag5
 ```
 
 ### 10.2 Cross-Organization Federation via A2A
 
-For cross-organization federation where the peer may not run AGRP, boundary Exchanges can expose A2A-compatible endpoints. The Exchange acts as a reverse proxy, translating between A2A HTTP discovery / task management and ASP:
+For cross-organization federation where the peer may not run AGRP, boundary Exchanges can expose A2A-compatible endpoints. The Exchange acts as a reverse proxy, translating between A2A HTTP discovery / task management and AGSP:
 
 ```
 External A2A Client
@@ -778,7 +778,7 @@ External A2A Client
     |                                      |
     |── POST /tasks (A2A) ───────────────→ Boundary Exchange
     |                                      |
-    |                           Wraps in ASP envelope, routes internally
+    |                           Wraps in AGSP envelope, routes internally
     |                                      |
     |←── A2A Response (proxied) ───────────|
 ```
@@ -800,9 +800,9 @@ AGRP is intentionally analogous to Kubernetes but for agent communication rather
 | Pod | Agent | Agent has session state, harness, model config |
 | Node | Exchange | Exchange is an active message forwarder, not a passive host |
 | etcd (Raft) | CP state (Raft) | Identical model |
-| kube-proxy | Exchange routing table | Exchange routes ASP envelopes, not TCP packets |
-| CNI | Inter-Exchange ASP | Fabric is semantic (JSON-RPC), not network-layer |
-| kubelet | RLM | RLM is pluggable (k8s, fork, serverless) |
+| kube-proxy | Exchange routing table | Exchange routes AGSP envelopes, not TCP packets |
+| CNI | Inter-Exchange AGSP | Fabric is semantic (JSON-RPC), not network-layer |
+| kubelet | ARLM | ARLM is pluggable (k8s, fork, serverless) |
 | NetworkPolicy | Approval policy | Policy enforced per-realm with human-in-the-loop |
 
 The critical difference: Kubernetes delegates networking to CNI and treats it as transparent infrastructure. AGRP treats the **communication fabric as the primary primitive**. The network is not transparent — it is the product.
@@ -815,8 +815,8 @@ AGRP is designed to be **compatible with and complementary to** these protocols:
 
 - **MCP:** Agents within an AGRP realm freely use MCP to access tools and data. The Exchange does not interfere with MCP connections. An MCP server can be co-located with the realm environment for shared tool access.
 - **A2A:** Boundary Exchanges expose A2A-compatible endpoints for interoperability. A2A messages between mesh-hosted agents are transparently relayed through the AGRP fabric.
-- **AGENTS.md:** Agent configuration (including AGENTS.md conventions) is orthogonal to AGRP. The RLM may use AGENTS.md to configure spawned agents.
-- **ACP:** Agents that are ACP-compatible coding agents (e.g., Claude Code, Gemini CLI) can be spawned inside a realm and connected to an editor via an ACP bridge. The bridge translates ACP's stdio JSON-RPC into ASP sessions.
+- **AGENTS.md:** Agent configuration (including AGENTS.md conventions) is orthogonal to AGRP. The ARLM may use AGENTS.md to configure spawned agents.
+- **ACP:** Agents that are ACP-compatible coding agents (e.g., Claude Code, Gemini CLI) can be spawned inside a realm and connected to an editor via an ACP bridge. The bridge translates ACP's stdio JSON-RPC into AGSP sessions.
 
 AGRP does not seek to replace any of these protocols. It provides the managed infrastructure mesh beneath them.
 
@@ -826,7 +826,7 @@ AGRP does not seek to replace any of these protocols. It provides the managed in
 
 The following topics require further specification:
 
-- **Companion ASP RFC:** The separate ASP specification still needs the full JSON-RPC method catalog, error codes, schemas, and negotiation details.
+- **Companion AGSP RFC:** The separate AGSP specification still needs the full JSON-RPC method catalog, error codes, schemas, and negotiation details.
 - **IAM payload schema:** Optional IAM enrichment on sessions and mandates is supported conceptually, but the payload schema and propagation rules are intentionally unspecified.
 - **Trust claim registry:** AGRP starts with `forward_messages`, `forward_approvals`, and `forward_mandates`, but it still needs a standard registry and negotiation semantics for future claims.
 - **Companion Environment/Resource RFC:** The separate environment/resource specification still needs the concrete `resource_call`, `resource_chunk`, and `resource_result` payload schemas, `resource_approval_policy` schema, lifecycle semantics, and required metadata.
@@ -842,7 +842,7 @@ The following are explicitly **not** part of this RFC:
 - Agent business logic or task delegation protocols (use A2A)
 - Agent-to-tool integration (use MCP)
 - Editor-to-agent integration (use ACP)
-- Specific ASP message payload formats beyond the envelope
+- Specific AGSP message payload formats beyond the envelope
 - Agent harness specification (opaque to the protocol)
 - Live agent session migration between Exchanges
 - Protocol-standardized observability and tracing semantics
