@@ -257,11 +257,9 @@ runtime_profiles:
         endpoint: ws://exchange.internal/agsp
         role: agent
         participant_name: worker
-      mandate_verification:
-        required: true
 ```
 
-This example is non-normative and local to the ARLM. It is not a Control Plane schema. AGRP only cares that the sidecar joins an Exchange over **AGSP**, reaches its parent agent over **ACP**, and enforces Exchange-issued mandates on delegated requests.
+This example is non-normative and local to the ARLM. It is not a Control Plane schema. AGRP only cares that the sidecar joins an Exchange over **AGSP**, reaches its parent agent over **ACP**, and verifies and enforces Exchange-issued mandates on delegated requests.
 
 ---
 
@@ -511,6 +509,124 @@ Participants normally omit `source_realm` and `destination_realm`. The Exchange 
 | `routing_update` | cp → exchange | Routing table push (Control Plane to Exchange only) |
 
 The `payload` field carries type-specific content. AGRP routes all types identically — the type field exists for client rendering and policy enforcement, not for routing decisions. AGRP does not define low-level agent execution contracts such as tool invocation or tool result messages. Approval messages in base AGRP are emitted only by the Exchange for Exchange-mediated policy gates and are not a generic agent UI primitive. For `resource_call`, the Exchange acts as a policy-enforcing proxy to the Environment/Resource service.
+
+### 4.4.1 Message Type Examples
+
+The following non-normative examples show how the main AGSP message types move through the mesh.
+
+#### `text`: explicit delegation and reply
+
+```mermaid
+sequenceDiagram
+    participant H as Human
+    participant EX as Exchange
+    participant SC as Agent Sidecar
+    participant AG as Agent
+
+    H->>EX: text to claude
+    EX->>SC: text + signed mandate
+    SC->>AG: ACP delegated request
+    AG-->>SC: ACP reply
+    SC-->>EX: text to role:human
+    EX-->>H: text reply
+```
+
+The human sends an explicitly targeted `text` message. The Exchange delivers it to the attached sidecar with a signed mandate, and the sidecar translates the request into ACP for the agent. The reply returns as a normal `text` message.
+
+#### `exchange_message`: untargeted human message
+
+```mermaid
+sequenceDiagram
+    participant H as Human
+    participant EX as Exchange
+    participant TX as Exchange Transcript
+
+    H->>EX: exchange_message
+    EX->>TX: append to local transcript when enabled
+```
+
+An untargeted human or bridge message becomes `exchange_message`. It is stored in the local exchange transcript or history when that layer is enabled and is not delegated to agents.
+
+#### `resource_call`, `resource_result`, `resource_chunk`, `resource_end`
+
+```mermaid
+sequenceDiagram
+    participant H as Human
+    participant EX as Exchange
+    participant RS as Environment/Resource Service
+
+    H->>EX: resource_call
+    EX->>RS: proxy resource_call + signed mandate
+    alt single response
+        RS-->>EX: resource_result
+        EX-->>H: resource_result
+    else streaming response
+        RS-->>EX: resource_chunk
+        EX-->>H: resource_chunk
+        RS-->>EX: resource_chunk
+        EX-->>H: resource_chunk
+        RS-->>EX: resource_end
+        EX-->>H: resource_end
+    end
+```
+
+The Exchange verifies policy, forwards the `resource_call` to the realm-scoped Environment/Resource service, and relays either a single `resource_result` or a streamed sequence of `resource_chunk` messages terminated by `resource_end`.
+
+#### `approval_request`, `approval_response`, `approval_denied`
+
+```mermaid
+sequenceDiagram
+    participant A as Requester
+    participant EX as Exchange
+    participant U as Human Approver
+
+    A->>EX: resource_call or delegated action
+    EX-->>U: approval_request
+    U-->>EX: approval_response denied
+    EX-->>A: approval_denied
+```
+
+When policy requires human approval, the Exchange emits `approval_request` to eligible human participants. If the action is denied, the Exchange emits `approval_denied` to the original requester and does not execute the underlying operation.
+
+#### `delivery_failure`
+
+```mermaid
+sequenceDiagram
+    participant S as Sender
+    participant EX as Exchange
+
+    S->>EX: text to remote participant
+    EX-->>S: delivery_failure
+```
+
+If the Exchange cannot route or deliver a message because of missing routes, insufficient trust, queue exhaustion, or TTL expiry, it emits `delivery_failure` back to the sender or upstream Exchange.
+
+#### `session_event`
+
+```mermaid
+sequenceDiagram
+    participant B as Bridge
+    participant EX as Exchange
+    participant H as Human
+
+    B->>EX: agsp/initialize + agsp/ready
+    EX-->>H: session_event joined
+```
+
+`session_event` notifies current participants when another participant joins, leaves, or changes status.
+
+#### `routing_update`
+
+```mermaid
+sequenceDiagram
+    participant CP as Control Plane
+    participant EX as Exchange
+
+    CP->>EX: routing_update
+    EX->>EX: swap local routing table atomically
+```
+
+`routing_update` is a Control-Plane-to-Exchange message carrying new routing state. The Exchange applies the update locally and continues forwarding without putting the Control Plane in the data path.
 
 ### 4.5 Broadcast and Fan-out
 
