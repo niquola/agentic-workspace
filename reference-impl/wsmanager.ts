@@ -107,7 +107,7 @@ const server = Bun.serve({
 
     // POST /workspaces — create
     if (url.pathname === "/workspaces" && req.method === "POST") {
-      const body = await req.json() as { name: string };
+      const body = await req.json() as { name: string; topics?: string[] };
       const name = body.name;
 
       if (!name) {
@@ -130,11 +130,40 @@ const server = Bun.serve({
         };
         workspaces.set(name, ws);
 
+        // Pre-create topics if specified
+        const topicNames = body.topics || [];
+        const createdTopics: string[] = [];
+        if (topicNames.length > 0) {
+          // Wait for wmlet to be ready
+          const wmletApi = `http://${HOST}:${port}`;
+          for (let i = 0; i < 20; i++) {
+            try {
+              const res = await fetch(`${wmletApi}/health`);
+              if (res.ok) break;
+            } catch {}
+            await Bun.sleep(500);
+          }
+          // Create each topic
+          for (const topicName of topicNames) {
+            try {
+              await fetch(`${wmletApi}/topics`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: topicName }),
+              });
+              createdTopics.push(topicName);
+            } catch (e: any) {
+              console.error(`[wsmanager] failed to create topic ${topicName}:`, e.message);
+            }
+          }
+        }
+
         return Response.json({
           name,
           status: "running",
           acp: `ws://${HOST}:${port}/acp`,
           api: `http://${HOST}:${port}`,
+          topics: createdTopics,
         }, { status: 201 });
       } catch (e: any) {
         return Response.json({ error: e.message }, { status: 500 });

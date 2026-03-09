@@ -10,7 +10,7 @@
 
 A workspace is an environment for humans and agents to collaborate on shared resources — code, documents, data, or any other resources relevant to the task at hand.
 
-Participants communicate through a shared conversation thread and act on resources through tools — all in one place. Every action is visible to everyone: who did what, why, and when. Humans connect from IDEs, terminals, or messengers. Agents live inside the workspace as persistent instances.
+A workspace is organized into topics — named conversation threads focused on specific tasks. Agents live inside topics as persistent instances. Humans connect to the workspace and can participate in any topic. Every action is visible to everyone: who did what, why, and when.
 
 Tools are governed by granular access control: each tool can be freely available, restricted by role, or require explicit approval for every use. Participants can delegate specific permissions to each other — a human can grant an agent the right to deploy, or an agent can request shell access for a particular task. This makes a workspace a controlled operational environment, not just a shared folder.
 
@@ -63,7 +63,7 @@ GET    /apis/v1/namespaces/{ns}/workspaces/{name}/files/{path}/ — list directo
 
 ### Example
 
-**1. Create a workspace:**
+**1. Create a workspace with topics:**
 
 ```yaml
 # POST /apis/v1/namespaces/acme/workspaces
@@ -71,13 +71,24 @@ name: payments-debug
 participants:
   - subject: alice@acme.com
     role: owner
-  - agent: claude
-    harness: anthropic/claude-code
+  - subject: bob@acme.com
     role: contributor
 resources:
   - source: git://github.com/acme/payments
     path: /code
+topics:
+  - name: general
+  - name: debug-timeout
+    agents:
+      - agent: claude
+        harness: anthropic/claude-code
+  - name: refactor-api
+    agents:
+      - agent: claude
+        harness: anthropic/claude-code
 ```
+
+Human participants (alice, bob) connect to the workspace and can read and write to any topic. Each agent instance is scoped to its topic — the claude in `debug-timeout` has a separate conversation context from the claude in `refactor-api`, but both share the same workspace resources.
 
 **Response:**
 
@@ -87,6 +98,13 @@ namespace: acme
 name: payments-debug
 status: active
 endpoint: wss://relay.example.com/acp/acme/payments-debug
+topics:
+  - name: general
+    acp: wss://relay.example.com/acp/acme/payments-debug/topics/general
+  - name: debug-timeout
+    acp: wss://relay.example.com/acp/acme/payments-debug/topics/debug-timeout
+  - name: refactor-api
+    acp: wss://relay.example.com/acp/acme/payments-debug/topics/refactor-api
 ```
 
 **2. Clone a workspace:**
@@ -101,7 +119,17 @@ This creates a new independent workspace `payments-experiment` from the state of
 
 **3. Connect via ACP:**
 
-Alice opens her IDE and connects to `wss://relay.example.com/acp/acme/payments-debug`. She sees the conversation thread, the agent `claude` is already active, and the code from `github.com/acme/payments` is mounted at `/code`. She types a message — both the agent and any other connected participants see it instantly.
+Alice opens her IDE and connects to `wss://relay.example.com/acp/acme/payments-debug`. She sees all topics — `general`, `debug-timeout`, `refactor-api`. She opens `debug-timeout` and types a message — the agent in that topic responds. Bob joins later and opens `refactor-api` to work on a different task. Both share the same codebase at `/code`.
+
+Topics can be added later without restarting the workspace:
+
+```yaml
+# POST /apis/v1/namespaces/acme/workspaces/payments-debug/topics
+name: write-tests
+agents:
+  - agent: claude
+    harness: anthropic/claude-code
+```
 
 ---
 
@@ -183,30 +211,11 @@ All tool calls go through the workspace runtime, which enforces policy, checks g
 
 ## 4. Topics
 
-A workspace contains one or more **topics** — named conversation threads where participants communicate and work. Every workspace starts with a default topic. New topics can be created at any time.
+A workspace contains one or more **topics** — named conversation threads where agents work on specific tasks. Topics can be created together with the workspace or added later.
 
-A topic is a focused conversation between a subset of participants — humans and agents — around a specific subject. All messages within a topic are persisted, audited, and included in workspace state.
+**Agents** live inside topics. Each topic has its own agent instance with a separate conversation context. An agent in `debug-timeout` knows nothing about the conversation in `refactor-api`, but both agents share the same workspace resources (files, tools, credentials).
 
-### Examples
-
-A workspace for a payments service might have:
-
-- `general` — default topic, high-level coordination
-- `debug-timeout` — an agent investigating a timeout bug
-- `refactor-api` — a human and agent working on API redesign
-- `ci` — automated notifications from CI/CD pipeline
-
-### Creating and Joining Topics
-
-Any participant can create a topic. Agents can be assigned to topics at creation time or join later. A participant can be active in multiple topics simultaneously.
-
-```yaml
-# Create a topic
-topic: debug-timeout
-participants:
-  - agent:claude
-  - alice@acme.com
-```
+**Humans** connect to the workspace as a whole and can participate in any topic — read messages, send prompts, observe agent work. A human can follow multiple topics simultaneously.
 
 ### API
 
@@ -217,12 +226,18 @@ GET    /apis/v1/namespaces/{ns}/workspaces/{name}/topics/{topic}      — get to
 DELETE /apis/v1/namespaces/{ns}/workspaces/{name}/topics/{topic}      — archive a topic
 ```
 
-Each topic has its own ACP endpoint for real-time communication:
+Each topic has its own ACP endpoint:
 
 ```
 wss://relay.example.com/acp/acme/payments-debug/topics/debug-timeout
 ```
 
-### Relationship to ACP Sessions
+### Lifecycle
 
-Each topic maps to an ACP session. When a client connects to a topic, they join the corresponding session. An agent running in a topic maintains its own conversation context — separate from other topics but sharing the same workspace resources.
+Topics can be created in three ways:
+
+1. **At workspace creation** — listed in the workspace spec under `topics:`
+2. **Via REST API** — `POST /topics` with a name and optional agent configuration
+3. **On demand** — when a human connects to a topic that doesn't exist yet, it is created automatically
+
+Each topic maps to an ACP session. When a topic is archived, its conversation history is preserved in workspace state but the agent process is terminated.

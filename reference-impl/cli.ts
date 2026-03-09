@@ -40,16 +40,21 @@ async function list() {
   }
 }
 
-async function create(name: string) {
-  if (!name) { console.error("Usage: ws create <name>"); process.exit(1); }
+async function create(name: string, topicNames: string[]) {
+  if (!name) { console.error("Usage: ws create <name> [topic1 topic2 ...]"); process.exit(1); }
+  const body: any = { name };
+  if (topicNames.length > 0) body.topics = topicNames;
   const data = await managerApi("/workspaces", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(body),
   });
   if (data.error) { console.error("Error:", data.error); process.exit(1); }
   console.log(`Created: ${data.name}`);
   console.log(`ACP:     ${data.acp}`);
+  if (data.topics?.length) {
+    console.log(`Topics:  ${data.topics.join(", ")}`);
+  }
 }
 
 async function del(name: string) {
@@ -153,7 +158,7 @@ switch (cmd) {
     await list();
     break;
   case "create":
-    await create(args[0]);
+    await create(args[0], args.slice(1));
     break;
   case "delete":
   case "rm":
@@ -174,7 +179,7 @@ switch (cmd) {
 
 Commands:
   list                       List workspaces
-  create <name>              Create workspace
+  create <name> [topics...]  Create workspace (optionally with topics)
   delete <name>              Delete workspace
   topics <name>              List topics in workspace
   connect <name> [topic]     Connect to topic (default: general)
