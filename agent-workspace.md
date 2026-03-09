@@ -6,7 +6,25 @@
 
 ---
 
-## 1. What is a Workspace
+## 1. Problem
+
+Today's agent experience is single-player. One human, one agent, one session — running locally on a developer's machine. This creates several problems:
+
+**No collaboration.** If an agent is debugging a production issue, a colleague cannot join the session to observe, help, or take over. There is no way to have two agents work on different parts of the same codebase in parallel while sharing context. Every agent session is an island.
+
+**Ephemeral context.** Close the terminal and the session is gone. There is no way to snapshot the state of a working session, roll back to an earlier point, or fork it to try a different approach. Handing off work to another person means copy-pasting conversation fragments.
+
+**All-or-nothing access.** An agent either has full access to everything or nothing at all. There is no way to say "you can read emails from this sender but need my approval to send" or "you can create pull requests but not push to main". Delegation and approval workflows do not exist.
+
+**Not addressable.** An agent session cannot receive a webhook, respond to an email, or be triggered by a CI event. It has no identity, no inbox, and cannot participate in automated workflows.
+
+**No standard for the environment.** MCP defines tool access. ACP defines how an IDE talks to an agent. A2A defines agent-to-agent collaboration. But there is no specification for the shared environment where humans and agents work together — the workspace itself.
+
+This protocol defines that environment.
+
+---
+
+## 2. What is a Workspace
 
 A workspace is an environment for humans and agents to collaborate on shared resources — code, documents, data, or any other resources relevant to the task at hand.
 
@@ -22,7 +40,7 @@ The entire workspace state — resources, conversation, configuration — is ver
 
 ---
 
-## 2. Workspace Manager
+## 3. Workspace Manager
 
 Workspace Manager is a service that manages workspace lifecycle — creating, listing, connecting, suspending, and terminating workspaces. It exposes a REST API that clients use before establishing an ACP connection.
 
@@ -133,7 +151,7 @@ agents:
 
 ---
 
-## 3. Tools
+## 4. Tools
 
 Tools are first-class resources in a workspace. A tool represents a capability — reading email, creating a pull request, querying a database, executing shell commands — together with the credentials to access it and the policy governing who can use it and how.
 
@@ -209,7 +227,7 @@ All tool calls go through the workspace runtime, which enforces policy, checks g
 
 ---
 
-## 4. Topics
+## 5. Topics
 
 A workspace contains one or more **topics** — named conversation threads where agents work on specific tasks. Topics can be created together with the workspace or added later.
 
