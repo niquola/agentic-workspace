@@ -367,6 +367,9 @@ Request body:
 }
 ```
 
+`data` is the canonical wire field for edited prompt content. Queue entry
+resources still use `text` inside snapshots and REST responses.
+
 Responses:
 - `200 OK` with the updated queue snapshot
 - `400` if `data` is missing or empty

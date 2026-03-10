@@ -109,30 +109,31 @@ All resources are scoped to a namespace, following the Kubernetes convention.
 ```
 POST   /apis/v1/namespaces/{ns}/workspaces                — create a workspace
 GET    /apis/v1/namespaces/{ns}/workspaces                — list workspaces
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}         — get workspace details and connection endpoint
-DELETE /apis/v1/namespaces/{ns}/workspaces/{name}         — terminate a workspace
-PUT    /apis/v1/namespaces/{ns}/workspaces/{name}/suspend — suspend a workspace
-PUT    /apis/v1/namespaces/{ns}/workspaces/{name}/resume  — resume a suspended workspace
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/clone   — clone a workspace
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}         — get workspace details and connection endpoint
+PATCH  /apis/v1/namespaces/{ns}/workspaces/{workspace}         — update workspace configuration
+DELETE /apis/v1/namespaces/{ns}/workspaces/{workspace}         — terminate a workspace
+PUT    /apis/v1/namespaces/{ns}/workspaces/{workspace}/suspend — suspend a workspace
+PUT    /apis/v1/namespaces/{ns}/workspaces/{workspace}/resume  — resume a suspended workspace
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/clone   — clone a workspace
 ```
 
 Workspace state versioning:
 
 ```
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/commits              — list commits
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/commits              — create a commit (snapshot)
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/commits/{commit}     — get commit details
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/commits/{commit}/rollback — rollback to this commit
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/commits/{commit}/clone    — clone workspace from this commit
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/commits                   — list commits
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/commits                   — create a commit (snapshot)
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/commits/{commit}          — get commit details
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/commits/{commit}/rollback — rollback to this commit
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/commits/{commit}/clone    — clone workspace from this commit
 ```
 
 Each workspace also exposes a Resource API for direct access to files:
 
 ```
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/files/{path}  — read file content
-PUT    /apis/v1/namespaces/{ns}/workspaces/{name}/files/{path}  — write file content
-DELETE /apis/v1/namespaces/{ns}/workspaces/{name}/files/{path}  — delete file
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/files/{path}/ — list directory
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/files/{path}  — read file content
+PUT    /apis/v1/namespaces/{ns}/workspaces/{workspace}/files/{path}  — write file content
+DELETE /apis/v1/namespaces/{ns}/workspaces/{workspace}/files/{path}  — delete file
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/files/{path}/ — list directory
 ```
 
 ### Example
@@ -271,12 +272,12 @@ Every delegation is recorded in the audit log. Grants can be revoked at any time
 ### API
 
 ```
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/tools              — list connected tools
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/tools              — connect a tool
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/tools/{tool}       — get tool details and grants
-DELETE /apis/v1/namespaces/{ns}/workspaces/{name}/tools/{tool}       — disconnect a tool
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/tools/{tool}/grants — add a grant
-DELETE /apis/v1/namespaces/{ns}/workspaces/{name}/tools/{tool}/grants/{grant} — revoke a grant
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/tools                     — list connected tools
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/tools                     — connect a tool
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/tools/{tool}              — get tool details and grants
+DELETE /apis/v1/namespaces/{ns}/workspaces/{workspace}/tools/{tool}              — disconnect a tool
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/tools/{tool}/grants       — add a grant
+DELETE /apis/v1/namespaces/{ns}/workspaces/{workspace}/tools/{tool}/grants/{grant} — revoke a grant
 ```
 
 All tool calls go through the workspace runtime, which enforces policy, checks grants, injects credentials, and logs every invocation. Agents never see raw tokens or secrets.
@@ -294,10 +295,10 @@ A workspace contains one or more **topics** — named conversation threads where
 ### API
 
 ```
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/topics              — list topics
-POST   /apis/v1/namespaces/{ns}/workspaces/{name}/topics              — create a topic
-GET    /apis/v1/namespaces/{ns}/workspaces/{name}/topics/{topic}      — get topic details
-DELETE /apis/v1/namespaces/{ns}/workspaces/{name}/topics/{topic}      — archive a topic
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/topics              — list topics
+POST   /apis/v1/namespaces/{ns}/workspaces/{workspace}/topics              — create a topic
+GET    /apis/v1/namespaces/{ns}/workspaces/{workspace}/topics/{topic}      — get topic details
+DELETE /apis/v1/namespaces/{ns}/workspaces/{workspace}/topics/{topic}      — archive a topic
 ```
 
 Each topic has its own ACP endpoint:
