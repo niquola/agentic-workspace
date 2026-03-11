@@ -8,15 +8,15 @@
  *   ws delete <name>                — delete workspace
  *   ws topics <name>                — list topics in workspace
  *   ws queue <name> <topic>         — show topic queue
- *   ws edit-queue <name> <topic> <promptId> <text...>
- *                                   — edit one of my queued prompts
- *   ws move-queue <name> <topic> <promptId> <up|down|top|bottom>
- *                                   — reorder one of my queued prompts
- *   ws clear-queue <name> <topic>   — clear my queued prompts
+ *   ws edit-queue <name> <topic> <runId> <text...>
+ *                                   — edit one of my queued runs
+ *   ws move-queue <name> <topic> <runId> <up|down|top|bottom>
+ *                                   — reorder one of my queued runs
+ *   ws clear-queue <name> <topic>   — clear my queued runs
  *   ws inject <name> <topic> <text...>
- *                                   — inject guidance into the active turn
+ *                                   — inject guidance into the active run
  *   ws interrupt <name> <topic> <reason...>
- *                                   — interrupt the active turn
+ *                                   — interrupt the active run
  *   ws connect <name> [topic]       — connect to topic (default: general)
  *   ws health                       — manager health
  */
@@ -147,16 +147,28 @@ function requestHeaders() {
   return { Authorization: `Bearer ${authState.token}` };
 }
 
-function printQueueSnapshot(snapshot: any) {
-  const active = snapshot.activePromptId ? `active=${snapshot.activePromptId}` : "active=none";
-  console.log(`\x1b[90m[queue] ${active}\x1b[0m`);
-  if (!Array.isArray(snapshot.entries) || snapshot.entries.length === 0) {
-    console.log(`\x1b[90m[queue] no queued prompts\x1b[0m`);
+function topicActivityLabel(topic: any) {
+  if (topic?.activeRun?.state === "running") {
+    return topic.activeRun.runId ? `running (${topic.activeRun.runId})` : "running";
+  }
+  if ((topic?.queuedCount ?? 0) > 0) {
+    return `idle (${topic.queuedCount} queued)`;
+  }
+  return "idle";
+}
+
+function printTopicState(topicState: any) {
+  const activeRun = topicState?.activeRun;
+  const queue = Array.isArray(topicState?.queue) ? topicState.queue : [];
+  const active = activeRun?.runId ? `active=${activeRun.runId}` : "active=none";
+  console.log(`\x1b[90m[topic] ${active}\x1b[0m`);
+  if (queue.length === 0) {
+    console.log(`\x1b[90m[queue] no queued runs\x1b[0m`);
     return;
   }
-  for (const entry of snapshot.entries) {
+  for (const entry of queue) {
     const owner = entry.submittedBy?.displayName || entry.submittedBy?.id || "unknown";
-    console.log(`\x1b[90m[queue] #${entry.position} ${entry.promptId} ${entry.status} by ${owner}: ${entry.text}\x1b[0m`);
+    console.log(`\x1b[90m[queue] #${entry.position} ${entry.runId} ${entry.state} by ${owner}: ${entry.text}\x1b[0m`);
   }
 }
 
@@ -171,11 +183,11 @@ function actorLabel(message: any, fallback = "user") {
 async function queue(name: string, topic = "general") {
   if (!name) { console.error("Usage: ws queue <workspace> <topic>"); process.exit(1); }
   const base = await workspaceBase(name);
-  const data = await api(`${base}/topics/${encodeURIComponent(topic)}/queue`, {
+  const data = await api(`${base}/topics/${encodeURIComponent(topic)}`, {
     headers: requestHeaders(),
   });
   if (data.error) { console.error("Error:", data.error); process.exit(1); }
-  printQueueSnapshot(data);
+  printTopicState(data);
 }
 
 async function clearQueue(name: string, topic = "general") {
@@ -187,19 +199,19 @@ async function clearQueue(name: string, topic = "general") {
   });
   if (data.error) { console.error("Error:", data.error); process.exit(1); }
   const removed = Array.isArray(data.removed) ? data.removed : [];
-  console.log(`Cleared ${removed.length} queued prompt(s).`);
+  console.log(`Cleared ${removed.length} queued run(s).`);
   if (removed.length > 0) {
     console.log(removed.join("\n"));
   }
 }
 
-async function editQueue(name: string, topic = "general", promptId?: string, text?: string) {
-  if (!name || !promptId || !text) {
-    console.error("Usage: ws edit-queue <workspace> <topic> <promptId> <text...>");
+async function editQueue(name: string, topic = "general", runId?: string, text?: string) {
+  if (!name || !runId || !text) {
+    console.error("Usage: ws edit-queue <workspace> <topic> <runId> <text...>");
     process.exit(1);
   }
   const base = await workspaceBase(name);
-  const data = await api(`${base}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(promptId)}`, {
+  const data = await api(`${base}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(runId)}`, {
     method: "PATCH",
     headers: {
       ...requestHeaders(),
@@ -208,16 +220,16 @@ async function editQueue(name: string, topic = "general", promptId?: string, tex
     body: JSON.stringify({ data: text }),
   });
   if (data.error) { console.error("Error:", data.error); process.exit(1); }
-  printQueueSnapshot(data);
+  printTopicState(data);
 }
 
-async function moveQueue(name: string, topic = "general", promptId?: string, direction?: string) {
-  if (!name || !promptId || !direction) {
-    console.error("Usage: ws move-queue <workspace> <topic> <promptId> <up|down|top|bottom>");
+async function moveQueue(name: string, topic = "general", runId?: string, direction?: string) {
+  if (!name || !runId || !direction) {
+    console.error("Usage: ws move-queue <workspace> <topic> <runId> <up|down|top|bottom>");
     process.exit(1);
   }
   const base = await workspaceBase(name);
-  const data = await api(`${base}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(promptId)}/move`, {
+  const data = await api(`${base}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(runId)}/move`, {
     method: "POST",
     headers: {
       ...requestHeaders(),
@@ -226,7 +238,7 @@ async function moveQueue(name: string, topic = "general", promptId?: string, dir
     body: JSON.stringify({ direction }),
   });
   if (data.error) { console.error("Error:", data.error); process.exit(1); }
-  printQueueSnapshot(data);
+  printTopicState(data);
 }
 
 async function inject(name: string, topic = "general", text?: string) {
@@ -262,7 +274,7 @@ async function interrupt(name: string, topic = "general", reason?: string) {
     body: JSON.stringify({ reason }),
   });
   if (data.error) { console.error("Error:", data.error); process.exit(1); }
-  console.log(`Interrupted: ${data.promptId} (${data.reason || data.status})`);
+  console.log(`Interrupted: ${data.runId} (${data.reason || data.status})`);
 }
 
 async function list() {
@@ -305,9 +317,9 @@ async function listTopics(name: string) {
   const base = await workspaceBase(name);
   const data = await api(`${base}/topics`, withAuth());
   if (!data.length) { console.log("No topics. Connect to create one."); return; }
-  console.log("TOPIC\t\tCLIENTS\tBUSY\tCREATED");
+  console.log("TOPIC\t\tCLIENTS\tACTIVITY\tCREATED");
   for (const t of data) {
-    console.log(`${t.name}\t\t${t.clients}\t${t.busy}\t${t.createdAt}`);
+    console.log(`${t.name}\t\t${t.clients ?? 0}\t${topicActivityLabel(t)}\t${t.createdAt || ""}`);
   }
 }
 
@@ -326,14 +338,39 @@ async function connect(name: string, topic = "general") {
 
   let connected = false;
   let reconnecting = false;
-  const promptStates = new Map<string, string>();
-  const ownPrompts: string[] = [];
-  const ownQueuedPromptIds = () => ownPrompts.filter((candidate) => promptStates.get(candidate) === "queued");
+  const runStates = new Map<string, string>();
+  const ownRuns: string[] = [];
+  let currentTopicState: any = { activeRun: null, queue: [] };
+  const ownQueuedRunIds = () => ownRuns.filter((candidate) => runStates.get(candidate) === "queued");
 
   function buildTopicURL() {
     const scheme = MANAGER.startsWith("https://") ? "wss://" : "ws://";
     const authority = MANAGER.replace(/^https?:\/\//, "").replace(/\/$/, "");
     return `${scheme}${authority}/apis/v1/namespaces/${encodeURIComponent(namespace)}/workspaces/${encodeURIComponent(name)}/topics/${encodeURIComponent(topic)}/events`;
+  }
+
+  function rememberOwnRun(msg: any) {
+    if (msg.submittedBy?.id === authState.subject && msg.runId && !ownRuns.includes(msg.runId)) {
+      ownRuns.push(msg.runId);
+    }
+  }
+
+  function applyTopicState(msg: any) {
+    currentTopicState = {
+      activeRun: msg.activeRun ?? null,
+      queue: Array.isArray(msg.queue) ? msg.queue : [],
+    };
+    if (currentTopicState.activeRun?.runId) {
+      runStates.set(currentTopicState.activeRun.runId, currentTopicState.activeRun.state || "running");
+      rememberOwnRun({
+        runId: currentTopicState.activeRun.runId,
+        submittedBy: currentTopicState.activeRun.submittedBy,
+      });
+    }
+    for (const entry of currentTopicState.queue) {
+      runStates.set(entry.runId, entry.state || "queued");
+      rememberOwnRun(entry);
+    }
   }
 
   function setupSocket(ws: WebSocket) {
@@ -354,24 +391,48 @@ async function connect(name: string, topic = "general") {
           console.log(`Type a message and press Enter. /help for commands, /quit to disconnect.\n`);
           promptInput();
           break;
-        case "queue_snapshot":
-          printQueueSnapshot(msg);
-          break;
-        case "prompt_status":
-          if (msg.submittedBy?.id === authState.subject && msg.promptId && !ownPrompts.includes(msg.promptId)) {
-            ownPrompts.push(msg.promptId);
+        case "topic_state": {
+          const previousActiveRunID = currentTopicState.activeRun?.runId || "";
+          const previousQueueLength = currentTopicState.queue?.length || 0;
+          applyTopicState(msg);
+          const activeLabel = topicActivityLabel({
+            activeRun: currentTopicState.activeRun,
+            queuedCount: currentTopicState.queue.length,
+          });
+          if (
+            msg.replay ||
+            previousActiveRunID !== (currentTopicState.activeRun?.runId || "") ||
+            previousQueueLength !== currentTopicState.queue.length
+          ) {
+            console.log(`\x1b[90m[topic] ${activeLabel}\x1b[0m`);
+            if (currentTopicState.queue.length > 0) {
+              printTopicState(currentTopicState);
+            }
           }
-          promptStates.set(msg.promptId, msg.status);
-          console.log(`\x1b[90m[prompt] ${msg.promptId} ${msg.status}${msg.position ? ` (#${msg.position})` : ""}${msg.data ? `: ${msg.data}` : ""}\x1b[0m`);
+          break;
+        }
+        case "run_updated":
+          rememberOwnRun(msg);
+          if (msg.runId && msg.state) {
+            runStates.set(msg.runId, msg.state);
+          }
+          console.log(`\x1b[90m[run] ${msg.runId} ${msg.state}${msg.position ? ` (#${msg.position})` : ""}${msg.text ? `: ${msg.text}` : ""}\x1b[0m`);
+          if (msg.state === "completed" || msg.state === "cancelled" || msg.state === "failed") {
+            console.log(`\n\x1b[90m--- ${msg.state}${msg.reason ? `: ${msg.reason}` : ""}\x1b[0m`);
+            promptInput();
+          }
           break;
         case "inject_status":
           console.log(`\x1b[90m[inject] ${msg.injectId} ${msg.status}${msg.reason ? ` (${msg.reason})` : ""}\x1b[0m`);
           break;
-        case "user":
-          console.log(`\x1b[36m[${actorLabel(msg)}] ${msg.data}\x1b[0m`);
-          break;
-        case "text":
-          process.stdout.write(msg.data);
+        case "message":
+          if (msg.role === "user") {
+            console.log(`\x1b[36m[${actorLabel(msg)}] ${msg.text || ""}\x1b[0m`);
+            break;
+          }
+          if (msg.role === "assistant") {
+            process.stdout.write(msg.text || "");
+          }
           break;
         case "tool_call":
           console.log(`\x1b[33m[tool] ${msg.title} (${msg.status})\x1b[0m`);
@@ -382,29 +443,9 @@ async function connect(name: string, topic = "general") {
             console.log(msg.data);
           }
           break;
-        case "done":
-          if (msg.status === "interrupted") {
-            console.log(`\n\x1b[90m--- interrupted${msg.reason ? `: ${msg.reason}` : ""}\x1b[0m`);
-          } else {
-            console.log(`\n\x1b[90m--- ${msg.status || "done"}\x1b[0m`);
-          }
-          promptInput();
-          break;
         case "error":
           console.error(`\x1b[31m[error] ${msg.data}\x1b[0m`);
           promptInput();
-          break;
-        case "queue_entry_removed":
-          console.log(`\x1b[90m[queue] removed ${msg.promptId} (${msg.reason || "removed"})\x1b[0m`);
-          break;
-        case "queue_entry_updated":
-          console.log(`\x1b[90m[queue] updated ${msg.promptId} (#${msg.position || "?"})\x1b[0m`);
-          break;
-        case "queue_entry_moved":
-          console.log(`\x1b[90m[queue] moved ${msg.promptId} ${msg.direction || ""} (#${msg.position || "?"})\x1b[0m`);
-          break;
-        case "queue_cleared":
-          console.log(`\x1b[90m[queue] cleared ${Array.isArray(msg.removed) ? msg.removed.join(", ") : ""}\x1b[0m`);
           break;
         default:
           console.log(`[${msg.type}]`, msg.data || "");
@@ -427,27 +468,27 @@ async function connect(name: string, topic = "general") {
   }
 
   async function showQueue() {
-    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue`, {
+    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}`, {
       headers: requestHeaders(),
     });
     if (data.error) {
       console.error(`\x1b[31m[error] ${data.error}\x1b[0m`);
       return;
     }
-    printQueueSnapshot(data);
+    printTopicState(data);
   }
 
-  async function cancelPrompt(id: string) {
-    let promptId = id;
-    if (promptId === "last") {
-      const pending = ownQueuedPromptIds();
-      promptId = pending[pending.length - 1];
-      if (!promptId) {
-        console.error(`\x1b[31m[error] no queued prompt to cancel\x1b[0m`);
+  async function cancelRun(id: string) {
+    let runId = id;
+    if (runId === "last") {
+      const pending = ownQueuedRunIds();
+      runId = pending[pending.length - 1];
+      if (!runId) {
+        console.error(`\x1b[31m[error] no queued run to cancel\x1b[0m`);
         return;
       }
     }
-    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(promptId)}`, {
+    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(runId)}`, {
       method: "DELETE",
       headers: requestHeaders(),
     });
@@ -455,22 +496,22 @@ async function connect(name: string, topic = "general") {
       console.error(`\x1b[31m[error] ${data.error}\x1b[0m`);
       return;
     }
-    console.log(`\x1b[90m[queue] cancel requested for ${promptId}\x1b[0m`);
+    console.log(`\x1b[90m[queue] cancel requested for ${runId}\x1b[0m`);
   }
 
-  function resolveQueuedPrompt(target: string) {
+  function resolveQueuedRun(target: string) {
     if (target !== "last") return target;
-    const pending = ownQueuedPromptIds();
+    const pending = ownQueuedRunIds();
     return pending[pending.length - 1] || "";
   }
 
-  async function editPrompt(target: string, text: string) {
-    const promptId = resolveQueuedPrompt(target);
-    if (!promptId) {
-      console.error(`\x1b[31m[error] no queued prompt to edit\x1b[0m`);
+  async function editRun(target: string, text: string) {
+    const runId = resolveQueuedRun(target);
+    if (!runId) {
+      console.error(`\x1b[31m[error] no queued run to edit\x1b[0m`);
       return;
     }
-    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(promptId)}`, {
+    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(runId)}`, {
       method: "PATCH",
       headers: {
         ...requestHeaders(),
@@ -482,16 +523,16 @@ async function connect(name: string, topic = "general") {
       console.error(`\x1b[31m[error] ${data.error}\x1b[0m`);
       return;
     }
-    printQueueSnapshot(data);
+    printTopicState(data);
   }
 
-  async function movePrompt(target: string, direction: "up" | "down" | "top" | "bottom") {
-    const promptId = resolveQueuedPrompt(target);
-    if (!promptId) {
-      console.error(`\x1b[31m[error] no queued prompt to move\x1b[0m`);
+  async function moveRun(target: string, direction: "up" | "down" | "top" | "bottom") {
+    const runId = resolveQueuedRun(target);
+    if (!runId) {
+      console.error(`\x1b[31m[error] no queued run to move\x1b[0m`);
       return;
     }
-    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(promptId)}/move`, {
+    const data = await api(`${apiBase}/topics/${encodeURIComponent(topic)}/queue/${encodeURIComponent(runId)}/move`, {
       method: "POST",
       headers: {
         ...requestHeaders(),
@@ -503,7 +544,7 @@ async function connect(name: string, topic = "general") {
       console.error(`\x1b[31m[error] ${data.error}\x1b[0m`);
       return;
     }
-    printQueueSnapshot(data);
+    printTopicState(data);
   }
 
   async function clearMine() {
@@ -516,7 +557,7 @@ async function connect(name: string, topic = "general") {
       return;
     }
     const removed = Array.isArray(data.removed) ? data.removed : [];
-    console.log(`\x1b[90m[queue] cleared ${removed.length} prompt(s)\x1b[0m`);
+    console.log(`\x1b[90m[queue] cleared ${removed.length} run(s)\x1b[0m`);
   }
 
   function sendPrompt(text: string, position?: number) {
@@ -540,21 +581,21 @@ async function connect(name: string, topic = "general") {
       if (text === "/quit" || text === "/exit") { socket.close(); process.exit(0); }
       if (text === "/help" || text === "/?") {
         console.log(`
-\x1b[1mPrompts & Queue\x1b[0m
-  <text>                Send a prompt (queued behind any active turn)
-  /next <text>          Send a prompt to the \x1b[1mfront\x1b[0m of the queue
-  /queue                Show the current queue
-  /cancel <id|last>     Cancel a queued prompt
-  /edit <id|last> <text>  Replace the text of a queued prompt
-  /up <id|last>         Move a queued prompt up one position
-  /down <id|last>       Move a queued prompt down one position
-  /top <id|last>        Move a queued prompt to the front
-  /bottom <id|last>     Move a queued prompt to the back
-  /clear                Clear all \x1b[1myour\x1b[0m queued prompts
+\x1b[1mRuns & Queue\x1b[0m
+  <text>                Submit a run (queued behind any active run)
+  /next <text>          Submit a run to the \x1b[1mfront\x1b[0m of the queue
+  /queue                Show the current topic state
+  /cancel <id|last>     Cancel a queued run
+  /edit <id|last> <text>  Replace the text of a queued run
+  /up <id|last>         Move a queued run up one position
+  /down <id|last>       Move a queued run down one position
+  /top <id|last>        Move a queued run to the front
+  /bottom <id|last>     Move a queued run to the back
+  /clear                Clear all \x1b[1myour\x1b[0m queued runs
 
-\x1b[1mActive Turn\x1b[0m
-  /inject <text>        Send guidance into the running turn (mid-turn)
-  /interrupt <reason>   Stop the active turn and move to the next prompt
+\x1b[1mActive Run\x1b[0m
+  /inject <text>        Send guidance into the running run
+  /interrupt <reason>   Stop the active run and move to the next queued run
 
 \x1b[1mOther\x1b[0m
   /name <name>          Change your display name (reconnects)
@@ -562,12 +603,12 @@ async function connect(name: string, topic = "general") {
   /quit                 Disconnect
 
 \x1b[1mExamples\x1b[0m
-  Hello, please summarize this repo          \x1b[90m# queued prompt\x1b[0m
+  Hello, please summarize this repo          \x1b[90m# queued run\x1b[0m
   /next Fix the typo in README first         \x1b[90m# jump the queue\x1b[0m
-  /inject Also check the tests               \x1b[90m# mid-turn guidance\x1b[0m
-  /interrupt Wrong approach, let me rethink   \x1b[90m# stop current turn\x1b[0m
-  /cancel last                               \x1b[90m# cancel your last queued prompt\x1b[0m
-  /edit last Use Python instead of Go         \x1b[90m# edit your last queued prompt\x1b[0m
+  /inject Also check the tests               \x1b[90m# mid-run guidance\x1b[0m
+  /interrupt Wrong approach, let me rethink   \x1b[90m# stop current run\x1b[0m
+  /cancel last                               \x1b[90m# cancel your last queued run\x1b[0m
+  /edit last Use Python instead of Go         \x1b[90m# edit your last queued run\x1b[0m
   /name JoshM                                \x1b[90m# change your display name\x1b[0m
 `);
         promptInput();
@@ -584,7 +625,7 @@ async function connect(name: string, topic = "general") {
         continue;
       }
       if (text.startsWith("/cancel ")) {
-        await cancelPrompt(text.slice("/cancel ".length).trim());
+        await cancelRun(text.slice("/cancel ".length).trim());
         promptInput();
         continue;
       }
@@ -592,11 +633,11 @@ async function connect(name: string, topic = "general") {
         const rest = text.slice("/edit ".length).trim();
         const splitAt = rest.indexOf(" ");
         if (splitAt <= 0) {
-          console.error(`\x1b[31m[error] usage: /edit <promptId|last> <text>\x1b[0m`);
+          console.error(`\x1b[31m[error] usage: /edit <runId|last> <text>\x1b[0m`);
           promptInput();
           continue;
         }
-        await editPrompt(rest.slice(0, splitAt), rest.slice(splitAt + 1).trim());
+        await editRun(rest.slice(0, splitAt), rest.slice(splitAt + 1).trim());
         promptInput();
         continue;
       }
@@ -616,22 +657,22 @@ async function connect(name: string, topic = "general") {
         continue;
       }
       if (text.startsWith("/up ")) {
-        await movePrompt(text.slice("/up ".length).trim(), "up");
+        await moveRun(text.slice("/up ".length).trim(), "up");
         promptInput();
         continue;
       }
       if (text.startsWith("/top ")) {
-        await movePrompt(text.slice("/top ".length).trim(), "top");
+        await moveRun(text.slice("/top ".length).trim(), "top");
         promptInput();
         continue;
       }
       if (text.startsWith("/down ")) {
-        await movePrompt(text.slice("/down ".length).trim(), "down");
+        await moveRun(text.slice("/down ".length).trim(), "down");
         promptInput();
         continue;
       }
       if (text.startsWith("/bottom ")) {
-        await movePrompt(text.slice("/bottom ".length).trim(), "bottom");
+        await moveRun(text.slice("/bottom ".length).trim(), "bottom");
         promptInput();
         continue;
       }
@@ -714,15 +755,15 @@ Commands:
   delete <name>              Delete workspace
   topics <name>              List topics in workspace
   queue <name> <topic>       Show topic queue
-  edit-queue <name> <topic> <promptId> <text...>
-                             Edit one of your queued prompts
-  move-queue <name> <topic> <promptId> <up|down|top|bottom>
-                             Reorder one of your queued prompts
-  clear-queue <name> <topic> Clear my queued prompts for a topic
+  edit-queue <name> <topic> <runId> <text...>
+                             Edit one of your queued runs
+  move-queue <name> <topic> <runId> <up|down|top|bottom>
+                             Reorder one of your queued runs
+  clear-queue <name> <topic> Clear my queued runs for a topic
   inject <name> <topic> <text...>
-                             Inject guidance into the active turn
+                             Inject guidance into the active run
   interrupt <name> <topic> <reason...>
-                             Interrupt the active turn
+                             Interrupt the active run
   connect <name> [topic]     Connect to topic (default: general)
   health                     Manager health`);
 }

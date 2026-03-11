@@ -5,22 +5,32 @@
 
 ## 1. Scope
 
-This document defines the public API that a client uses to work with
-namespaced workspaces, topic-based agent collaboration, queue management,
-managed MCP tools, and namespace lifecycle events.
+This document defines the clean public API for:
 
-It is intentionally opinionated. It describes the clean public contract that
-multiple implementations should share. It does not preserve historical alias
-routes, manager-only helper APIs, or internal runtime details.
+- namespaced workspaces
+- topic-based collaborative agent work
+- active and queued runs within a topic
+- topic event streaming
+- queue mutation
+- inject and interrupt operations
+- a minimal tool inventory and managed MCP tool surface
+- a provisional workspace file profile
+- namespace lifecycle events
+
+It is intentionally opinionated. It describes the public contract that
+independent implementations should share. It does not preserve historical alias
+routes, helper endpoints, or implementation-specific runtime details.
 
 In particular, this document does not standardize:
 
 - `/acp/...` compatibility routes
 - `/workspaces/...` compatibility routes
-- internal Shelley runtime routes such as `/ws/...`
-- the manager-local tool catalog used by the current web UI
+- internal runtime routes such as `/ws/...`
+- manager-local helper APIs such as `/apis/v1/local-tools`
+- deployment topology, broker design, environment variables, or filesystem
+  layout
 
-## 2. Resource Model
+## 2. Core Model
 
 The public hierarchy is:
 
@@ -40,19 +50,48 @@ The canonical WebSocket endpoints live under the same hierarchy:
 wss://.../apis/v1/namespaces/{namespace}/...
 ```
 
-There are two public streams:
+A topic has two kinds of state:
 
-- a topic event stream for live topic participation
-- a namespace event stream for manager lifecycle notifications
+- durable transcript history
+- current runtime state
+
+Current runtime state is defined as:
+
+- zero or one active `run`
+- an ordered queue of future runs
+
+A prompt submission creates a run. If the topic is idle, that run may start
+immediately. If the topic is already executing, the new run is queued.
+
+A run may receive additional injected user input while it is active. Injection
+does not create a second concurrent run. It appends input to the active run.
+
+Queued work is therefore a queue of future runs, not a queue of arbitrary
+messages.
+
+Defined run states are:
+
+- `queued`
+- `running`
+- `completed`
+- `cancelled`
+- `failed`
+
+At most one run may be `running` in a topic at any moment.
 
 ## 3. Common Rules
 
 - JSON timestamps use RFC3339 UTC.
-- `eventId`, `promptId`, `injectId`, `toolCallId`, `grantId`, and `logId`
-  are opaque strings.
-- Clients MUST ignore unknown response fields.
+- `eventId`, `runId`, `injectId`, `toolCallId`, `grantId`, and `logId` are
+  opaque strings.
+- Clients MUST ignore unknown fields.
 - Topic WebSockets use a custom JSON message protocol. They are not JSON-RPC.
-- `promptId` and `injectId` are server-assigned. Clients do not mint them.
+- `runId`, `injectId`, and `toolCallId` are server-assigned.
+- Clients do not provide `submittedBy`, `interruptedBy`, or other attribution
+  fields.
+- Current topic state and replayed history are distinct protocol concepts.
+- Current topic state is authoritative for what is happening now.
+- Replay is historical only. It MUST NOT redefine current execution state.
 
 ## 4. Authentication And Actor Identity
 
@@ -64,15 +103,13 @@ HTTP requests carry the token in:
 Authorization: Bearer <jwt>
 ```
 
-WebSocket clients carry the same token as:
+WebSocket clients authenticate by sending:
 
-```text
+```json
 { "type": "authenticate", "token": "<jwt>" }
 ```
 
-The socket opens first. The client then sends `authenticate` as its first
-message. The server replies with `authenticated`, and only then begins the
-normal event stream.
+as the first client message on the socket.
 
 For public contract purposes:
 
@@ -80,19 +117,12 @@ For public contract purposes:
 - `name` is the preferred display name
 - implementations MAY also fall back to `preferred_username` or `email`
 
-The checked-in demo profile currently accepts unsecured JWTs (`alg: none`) so
-the smoke tests and browser demo can run without key management. Real
+Servers derive actor identity from the JWT. Clients do not define actor
+identity through custom headers, cookies, or self-reported participant fields.
+
+The checked-in demo profile currently accepts unsigned JWTs (`alg: none`) so
+the browser demo and smoke tests can run without key management. Real
 deployments SHOULD validate signatures and standard JWT claims.
-
-Servers derive actor identity from the JWT. Clients do not provide:
-
-- ad hoc client-id headers
-- participant cookies
-- `submittedBy`
-- `interruptedBy`
-- approver identity strings as an access-control primitive
-
-Those fields are server-emitted attribution only.
 
 ## 5. Workspaces
 
@@ -133,32 +163,16 @@ Example request:
 
 Rules:
 
-- `name` is required.
-- `template` is optional.
-- `topics` is optional.
+- `name` is required
+- `template` is optional
+- `topics` is optional
 - topic names in the create request are pre-created before the workspace is
-  returned.
-- duplicate workspace names return `409 Conflict`.
-
-Example response:
-
-```json
-{
-  "id": "payments-debug.acme@shelleymanager",
-  "namespace": "acme",
-  "name": "payments-debug",
-  "status": "running",
-  "createdAt": "2026-03-11T12:00:00Z",
-  "topics": [
-    { "name": "general" },
-    { "name": "debug-timeout" }
-  ]
-}
-```
+  returned
+- duplicate workspace names return `409 Conflict`
 
 ### 5.3 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}`
 
-Returns a workspace record.
+Returns a workspace record plus topic summaries.
 
 Example:
 
@@ -172,15 +186,25 @@ Example:
   "topics": [
     {
       "name": "general",
+      "activeRun": {
+        "runId": "r_123",
+        "state": "running",
+        "interruptible": true,
+        "submittedBy": {
+          "id": "user_123",
+          "displayName": "Alice Example"
+        }
+      },
+      "queuedCount": 2,
+      "createdAt": "2026-03-11T12:05:00Z",
       "events": "wss://relay.example.com/apis/v1/namespaces/acme/workspaces/payments-debug/topics/general/events"
     }
   ]
 }
 ```
 
-Implementations MAY include additional workspace metadata. The checked-in
-Shelley manager currently includes local-runtime metadata under `runtime`, but
-that is not part of the interoperable base contract.
+Implementations MAY include additional workspace metadata. That metadata is not
+part of the interoperable base contract unless another RFC standardizes it.
 
 ### 5.4 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}`
 
@@ -208,24 +232,75 @@ shape is committed here.
 
 ## 6. Topics
 
-### 6.1 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics`
+### 6.1 Topic Summary And Topic State
 
-Returns the topics in a workspace.
+A `TopicSummary` is the compact shape used in workspace detail and topic lists.
 
 Example:
 
 ```json
-[
-  {
-    "name": "debug-timeout",
-    "busy": true,
-    "createdAt": "2026-03-11T12:00:00Z",
-    "events": "wss://relay.example.com/apis/v1/namespaces/acme/workspaces/payments-debug/topics/debug-timeout/events"
-  }
-]
+{
+  "name": "debug-timeout",
+  "activeRun": {
+    "runId": "r_123",
+    "state": "running",
+    "interruptible": true,
+    "submittedBy": {
+      "id": "user_123",
+      "displayName": "Alice Example"
+    }
+  },
+  "queuedCount": 2,
+  "createdAt": "2026-03-11T12:05:00Z",
+  "events": "wss://relay.example.com/apis/v1/namespaces/acme/workspaces/payments-debug/topics/debug-timeout/events"
+}
 ```
 
-### 6.2 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics`
+A `TopicState` is the full current state shape used by `GET topic` and by the
+topic WebSocket bootstrap.
+
+Example:
+
+```json
+{
+  "name": "debug-timeout",
+  "activeRun": {
+    "runId": "r_123",
+    "state": "running",
+    "interruptible": true,
+    "submittedBy": {
+      "id": "user_123",
+      "displayName": "Alice Example"
+    }
+  },
+  "queue": [
+    {
+      "runId": "r_124",
+      "state": "queued",
+      "text": "Search HL7 Jira for precedent.",
+      "position": 1,
+      "submittedBy": {
+        "id": "user_456",
+        "displayName": "Bob Example"
+      }
+    }
+  ],
+  "createdAt": "2026-03-11T12:05:00Z",
+  "events": "wss://relay.example.com/apis/v1/namespaces/acme/workspaces/payments-debug/topics/debug-timeout/events"
+}
+```
+
+Rules:
+
+- `activeRun` is absent or null when the topic is idle
+- `queue` contains future runs only
+- `queue` does not include the active run
+
+### 6.2 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics`
+
+Returns topic summaries for the workspace.
+
+### 6.3 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics`
 
 Creates a topic.
 
@@ -240,19 +315,22 @@ Example response:
 ```json
 {
   "name": "debug-timeout",
-  "busy": false,
-  "createdAt": "2026-03-11T12:00:00Z",
+  "queuedCount": 0,
+  "createdAt": "2026-03-11T12:05:00Z",
   "events": "wss://relay.example.com/apis/v1/namespaces/acme/workspaces/payments-debug/topics/debug-timeout/events"
 }
 ```
 
 Creating an already-active topic returns `409 Conflict`.
 
-### 6.3 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}`
+### 6.4 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}`
 
-Returns a single topic record in the same shape.
+Returns the current `TopicState`.
 
-### 6.4 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}`
+This is the canonical REST read for current topic runtime state after refresh
+or reconnect.
+
+### 6.5 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}`
 
 Archives a topic.
 
@@ -265,8 +343,8 @@ Example:
 }
 ```
 
-If a topic is later recreated with the same name, prior conversation history
-may be restored.
+If a topic is later recreated with the same name, prior transcript history may
+be restored.
 
 ## 7. Topic Event Stream
 
@@ -285,11 +363,15 @@ Example:
 }
 ```
 
-On successful authentication, the server sends `authenticated`, then
-`connected`, replays transcript-derived state, and then sends a
-`queue_snapshot`.
+On successful authentication, the server sends:
 
-Example auth acknowledgement:
+1. `authenticated`
+2. `connected`
+3. current `topic_state`
+4. optional replayed historical events
+5. live events
+
+Example authentication acknowledgement:
 
 ```json
 {
@@ -301,7 +383,7 @@ Example auth acknowledgement:
 }
 ```
 
-Example initial message:
+Example connection acknowledgement:
 
 ```json
 {
@@ -312,7 +394,53 @@ Example initial message:
 }
 ```
 
-### 7.2 Client Message: `prompt`
+Rules:
+
+- `topic_state` is the authoritative current topic state
+- replayed transcript and lifecycle events are historical only
+- replay MUST NOT cause clients to infer that a currently running run is idle
+- servers MAY send a fresh `topic_state` whenever the current active run or
+  queue changes
+- `GET topic` and websocket `topic_state` are two views of the same underlying
+  state
+
+### 7.2 Server Message: `topic_state`
+
+`topic_state` is the authoritative machine-state message for current topic
+execution and queue state.
+
+Example:
+
+```json
+{
+  "type": "topic_state",
+  "activeRun": {
+    "runId": "r_123",
+    "state": "running",
+    "interruptible": true,
+    "submittedBy": {
+      "id": "user_123",
+      "displayName": "Alice Example"
+    }
+  },
+  "queue": [
+    {
+      "runId": "r_124",
+      "state": "queued",
+      "text": "Search HL7 Jira for precedent.",
+      "position": 1,
+      "submittedBy": {
+        "id": "user_456",
+        "displayName": "Bob Example"
+      }
+    }
+  ]
+}
+```
+
+Clients MUST use `topic_state` to understand current execution and queue state.
+
+### 7.3 Client Message: `prompt`
 
 Path:
 
@@ -331,23 +459,24 @@ Example:
 
 Rules:
 
-- `data` is required.
-- clients do not send `promptId`.
-- `position: 0` MAY be used to place a prompt at the front of the queue.
-- without `position`, prompts append after any active turn and queued work.
+- `data` is required
+- clients do not send `runId`
+- `position: 0` MAY be used to place the new run at the front of the queue
+- without `position`, new work appends after any active run and queued work
+- the server decides whether the new run begins immediately or is queued
 
-### 7.3 Server Message: `prompt_status`
+### 7.4 Server Message: `run_updated`
 
-`prompt_status` is the authoritative prompt lifecycle signal.
+`run_updated` is the authoritative lifecycle event for an individual run.
 
-Example:
+Example queued run:
 
 ```json
 {
-  "type": "prompt_status",
-  "promptId": "p_123",
-  "status": "queued",
-  "data": "Please debug the timeout.",
+  "type": "run_updated",
+  "runId": "r_124",
+  "state": "queued",
+  "text": "Please debug the timeout.",
   "position": 1,
   "submittedBy": {
     "id": "user_123",
@@ -356,35 +485,95 @@ Example:
 }
 ```
 
-Defined prompt status values:
-
-- `accepted`
-- `queued`
-- `started`
-- `completed`
-- `cancelled`
-- `failed`
-
-Clients learn `promptId` from `accepted` or from a queue snapshot, and use it
-later for queue mutation APIs.
-
-### 7.4 Transcript And Tool Messages
-
-The topic stream also carries transcript and tool execution events.
-
-Examples:
+Example running run:
 
 ```json
-{ "type": "user", "data": "Please debug the timeout." }
+{
+  "type": "run_updated",
+  "runId": "r_124",
+  "state": "running",
+  "submittedBy": {
+    "id": "user_123",
+    "displayName": "Alice Example"
+  }
+}
 ```
 
+Example cancelled run:
+
 ```json
-{ "type": "text", "data": "I found the issue..." }
+{
+  "type": "run_updated",
+  "runId": "r_124",
+  "state": "cancelled",
+  "reason": "Wrong approach.",
+  "interruptedBy": {
+    "id": "user_456",
+    "displayName": "Bob Example"
+  }
+}
 ```
+
+Rules:
+
+- the first `run_updated` for a submitted prompt is its acceptance into topic
+  processing
+- the first state for a new run is either `queued` or `running`
+- `queued -> running -> terminal` is the normal lifecycle
+- queued-run edits and queue-position changes are reflected by later
+  `run_updated` events for the same `runId`
+- terminal states are `completed`, `cancelled`, and `failed`
+- once a run reaches a terminal state, it does not return to a non-terminal
+  state
+- if `topic_state.activeRun` is present, it MUST refer to the unique run whose
+  latest lifecycle state is `running`
+- when current queue shape changes, the server SHOULD also send a fresh
+  `topic_state`
+
+### 7.5 Server Message: `message`
+
+`message` carries durable transcript events.
+
+Example user message:
+
+```json
+{
+  "type": "message",
+  "runId": "r_124",
+  "role": "user",
+  "text": "Please debug the timeout.",
+  "submittedBy": {
+    "id": "user_123",
+    "displayName": "Alice Example"
+  }
+}
+```
+
+Example assistant message:
+
+```json
+{
+  "type": "message",
+  "runId": "r_124",
+  "role": "assistant",
+  "text": "I found the issue..."
+}
+```
+
+Rules:
+
+- for this profile, transcript message content is plain text
+- `message` events may be replayed
+- replayed `message` events are history, not current runtime state
+
+### 7.6 Tool And Approval Messages
+
+Tool call:
 
 ```json
 {
   "type": "tool_call",
+  "runId": "r_124",
   "toolCallId": "call_123",
   "title": "workspace_github",
   "tool": "workspace_github",
@@ -392,30 +581,24 @@ Examples:
 }
 ```
 
+Tool update:
+
 ```json
 {
   "type": "tool_update",
+  "runId": "r_124",
   "toolCallId": "call_123",
-  "title": "workspace_github",
-  "tool": "workspace_github",
   "status": "completed",
   "data": "Pull request created"
 }
 ```
 
-### 7.5 Approval Messages
-
-Path:
-
-```text
-wss://.../apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/events
-```
-
-Server request:
+Approval request:
 
 ```json
 {
   "type": "approval_request",
+  "runId": "r_124",
   "toolCallId": "call_123",
   "tool": "github",
   "action": "repo.push",
@@ -436,11 +619,11 @@ Client response:
 
 Rules:
 
+- tool and approval activity belongs to a run
 - approval is keyed by `toolCallId`
-- there is no standalone approval resource
-- the approving actor is derived from the JWT-backed connection context
+- the approving actor is derived from the authenticated connection
 
-### 7.6 Inject Messages
+### 7.7 Client Message: `inject`
 
 Path:
 
@@ -448,7 +631,7 @@ Path:
 wss://.../apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/events
 ```
 
-Client request:
+Example:
 
 ```json
 {
@@ -463,7 +646,7 @@ Server status:
 {
   "type": "inject_status",
   "injectId": "inj_123",
-  "promptId": "p_123",
+  "runId": "r_124",
   "status": "accepted"
 }
 ```
@@ -471,15 +654,15 @@ Server status:
 Defined inject status values:
 
 - `accepted`
-- `delivered`
 - `rejected`
 
 Rules:
 
-- clients do not send `injectId`
-- inject is valid only while a turn is active
+- inject is valid only when there is an active run
+- successful inject appends user input to the active run
+- inject does not create a second run
 
-### 7.7 Interrupt Messages
+### 7.8 Client Message: `interrupt`
 
 Path:
 
@@ -487,7 +670,7 @@ Path:
 wss://.../apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/events
 ```
 
-Client request:
+Example:
 
 ```json
 {
@@ -496,103 +679,51 @@ Client request:
 }
 ```
 
-Server completion event:
+Server acknowledgement:
 
 ```json
 {
-  "type": "done",
-  "promptId": "p_123",
-  "status": "interrupted",
-  "reason": "Wrong approach.",
-  "interruptedBy": {
-    "id": "user_123",
-    "displayName": "Alice Example"
-  }
+  "type": "interrupt_status",
+  "runId": "r_124",
+  "status": "accepted"
 }
 ```
 
-### 7.8 Queue Realtime Messages
+Defined interrupt status values:
 
-Snapshot:
+- `accepted`
+- `rejected`
 
-```json
-{
-  "type": "queue_snapshot",
-  "activePromptId": "p_120",
-  "entries": []
-}
-```
+Rules:
 
-Update:
+- interrupt applies to the active run
+- successful interrupt requests are eventually reflected by terminal
+  `run_updated` for that run
+- terminal run state, not the interrupt acknowledgement, is authoritative
 
-```json
-{ "type": "queue_entry_updated", "promptId": "p_121" }
-```
-
-Move:
-
-```json
-{ "type": "queue_entry_moved", "promptId": "p_121", "direction": "top" }
-```
-
-Removal:
-
-```json
-{ "type": "queue_entry_removed", "promptId": "p_121" }
-```
-
-Clear acknowledgement:
-
-```json
-{ "type": "queue_cleared", "removed": ["p_121", "p_122"] }
-```
-
-### 7.9 Error And Status Text
-
-Error:
-
-```json
-{ "type": "error", "data": "no active turn" }
-```
-
-Status text:
-
-```json
-{ "type": "system", "data": "thinking..." }
-```
-
-`system` is display-oriented status text. It is not a machine-state resource.
-
-## 8. Queue REST API
-
-### 8.1 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue`
-
-Returns the queue snapshot.
+### 7.9 Error Messages
 
 Example:
 
 ```json
-{
-  "activePromptId": "p_120",
-  "entries": [
-    {
-      "promptId": "p_121",
-      "status": "queued",
-      "text": "Search HL7 Jira for precedent.",
-      "createdAt": "2026-03-11T12:00:01Z",
-      "position": 1,
-      "submittedBy": {
-        "id": "user_123",
-        "displayName": "Alice Example"
-      }
-    }
-  ]
-}
+{ "type": "error", "data": "no active run" }
 ```
 
-### 8.2 PATCH `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue/{promptId}`
+`error` is for protocol-level rejection or failure. It is not the authoritative
+representation of current topic state.
 
-Updates a queued prompt owned by the caller.
+## 8. Queue Mutation REST API
+
+Current queue state is available from:
+
+- `GET /apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}`
+- websocket `topic_state`
+
+The queue mutation surface operates on queued runs, not on the active run.
+
+### 8.1 PATCH `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue/{runId}`
+
+Updates a queued run owned by the caller.
 
 Example request:
 
@@ -600,17 +731,17 @@ Example request:
 { "data": "Search HL7 Jira for precedent and summarize the result." }
 ```
 
-Success returns the updated queue snapshot.
+Success returns the updated `TopicState`.
 
-### 8.3 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue/{promptId}`
+### 8.2 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue/{runId}`
 
-Deletes a queued prompt owned by the caller.
+Deletes a queued run owned by the caller.
 
 Success returns `204 No Content`.
 
-### 8.4 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue/{promptId}/move`
+### 8.3 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue/{runId}/move`
 
-Moves a queued prompt owned by the caller.
+Moves a queued run owned by the caller.
 
 Example request:
 
@@ -625,155 +756,33 @@ Defined move directions:
 - `top`
 - `bottom`
 
-Success returns the updated queue snapshot.
+Success returns the updated `TopicState`.
 
-### 8.5 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue:clear-mine`
+### 8.4 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/queue:clear-mine`
 
-Clears queued prompts owned by the caller.
+Clears queued runs owned by the caller.
 
 Example response:
 
 ```json
 {
-  "removed": ["p_121", "p_122"]
+  "removed": ["r_121", "r_122"]
 }
 ```
 
 Queue mutation rules:
 
-- only the submitting participant may update, move, or delete a queued prompt
-- `404 Not Found` means the topic or prompt does not exist
-- `403 Forbidden` means the caller does not own that queued prompt
-- `409 Conflict` means the prompt is no longer cancellable or movable
+- only the submitting participant may update, move, or delete a queued run
+- only queued runs may be mutated through this API
+- `404 Not Found` means the topic or run does not exist
+- `403 Forbidden` means the caller does not own that queued run
+- `409 Conflict` means the run is no longer queued or movable
 
-## 9. File API
+## 9. Inject And Interrupt REST API
 
-The Shelley-backed profile currently exposes workspace file operations at:
+### 9.1 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/inject`
 
-```text
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/content
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/directories
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/move
-```
-
-All file paths are workspace-relative. The root directory is addressed by omitting
-`path` or sending it as the empty string. Absolute paths, backslashes, and
-traversal segments such as `..` are invalid.
-
-### 9.1 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files?path={relative-path}`
-
-Returns JSON metadata for the addressed path. If the path is a directory, the
-response also includes its direct child entries.
-
-```json
-{
-  "node": {
-    "path": "docs",
-    "name": "docs",
-    "kind": "directory",
-    "size": 0,
-    "modifiedAt": "2026-03-11T12:00:00Z"
-  },
-  "entries": [
-    {
-      "path": "docs/note.txt",
-      "name": "note.txt",
-      "kind": "file",
-      "size": 15,
-      "modifiedAt": "2026-03-11T12:00:00Z",
-      "mimeType": "text/plain; charset=utf-8"
-    }
-  ]
-}
-```
-
-### 9.2 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/content?path={relative-path}`
-
-Reads the addressed file and returns its raw content with the normal content
-type. Directory paths are rejected.
-
-### 9.3 PUT `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/content?path={relative-path}`
-
-Writes the raw request body to the addressed workspace-relative file path.
-The parent directory must already exist.
-
-Example response:
-
-```json
-{
-  "node": {
-    "path": "docs/note.txt",
-    "name": "note.txt",
-    "kind": "file",
-    "size": 15,
-    "modifiedAt": "2026-03-11T12:00:00Z",
-    "mimeType": "text/plain; charset=utf-8"
-  }
-}
-```
-
-### 9.4 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/directories?path={relative-path}`
-
-Creates a directory. Intermediate directories may be created as needed.
-
-Example response:
-
-```json
-{
-  "node": {
-    "path": "docs",
-    "name": "docs",
-    "kind": "directory",
-    "size": 0,
-    "modifiedAt": "2026-03-11T12:00:00Z"
-  }
-}
-```
-
-### 9.5 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/move`
-
-Moves or renames a file or directory.
-
-Example request:
-
-```json
-{
-  "from": "docs/note.txt",
-  "to": "docs/archive/note.txt"
-}
-```
-
-The destination parent directory must already exist, and the destination path
-must not already exist.
-
-### 9.6 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files?path={relative-path}[&recursive=true]`
-
-Deletes the addressed file or directory.
-
-- deleting a non-empty directory without `recursive=true` returns `409 Conflict`
-- deleting the workspace root is invalid
-
-Example response:
-
-```json
-{
-  "path": "docs/note.txt",
-  "status": "deleted"
-}
-```
-
-Path validation rules:
-
-- absolute paths return `400 Bad Request`
-- traversal outside the workspace root returns `403 Forbidden`
-- direct workspace runtime calls require a trusted workspace principal
-
-## 10. Inject And Interrupt REST API
-
-### 10.1 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/inject`
-
-Injects a user message into the active turn.
+Injects a user message into the active run.
 
 Example request:
 
@@ -781,21 +790,20 @@ Example request:
 { "data": "Also check the retry path." }
 ```
 
-Example response:
+Example success:
 
 ```json
 {
-  "injectId": "inj_123",
+  "runId": "r_124",
   "status": "accepted"
 }
 ```
 
-If no turn is active, the endpoint returns `409 Conflict` with an
-`inject_status`-style rejection body.
+If no run is active, the endpoint returns `409 Conflict`.
 
-### 10.2 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/interrupt`
+### 9.2 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/interrupt`
 
-Interrupts the active turn.
+Requests interruption of the active run.
 
 Example request:
 
@@ -803,11 +811,20 @@ Example request:
 { "reason": "Wrong approach." }
 ```
 
-Success returns the corresponding `done` event body for the interrupted turn.
+Example success:
 
-## 11. Tools
+```json
+{
+  "runId": "r_124",
+  "status": "accepted"
+}
+```
 
-### 11.1 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools`
+If no run is active, the endpoint returns `409 Conflict`.
+
+## 10. Tools
+
+### 10.1 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools`
 
 Returns the tools enabled for the workspace.
 
@@ -828,13 +845,12 @@ Example:
 ]
 ```
 
-This is the public tool inventory surface. It is what slash-tools style UI
-should use.
+This is the public tool inventory surface.
 
 This document does not define how local runtime tools are selected or managed.
 It commits only to their appearance in the inventory when they are enabled.
 
-### 11.2 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools`
+### 10.2 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools`
 
 Registers a managed MCP tool.
 
@@ -864,39 +880,15 @@ Rules:
 - for MCP, clients ordinarily omit a `tools` array
 - when omitted, the server may discover callable actions through MCP discovery
 
-### 11.3 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}`
+### 10.3 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}`
 
 Returns a managed tool resource.
 
-Example:
-
-```json
-{
-  "kind": "mcp",
-  "name": "github",
-  "description": "GitHub repository operations",
-  "provider": "alice@example.com",
-  "protocol": "mcp",
-  "transport": {
-    "type": "streamable_http",
-    "url": "https://github-mcp.example.com",
-    "headers": {
-      "Authorization": { "redacted": true }
-    }
-  },
-  "grants": [],
-  "log": []
-}
-```
-
-Managed tool detail is where grants and audit history live. Local tools
-participate only in the inventory endpoint.
-
-### 11.4 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}`
+### 10.4 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}`
 
 Disconnects a managed tool from the workspace.
 
-### 11.5 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}/grants`
+### 10.5 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}/grants`
 
 Adds a grant for a managed tool.
 
@@ -918,44 +910,72 @@ Defined access values:
 - `approval_required`
 - `denied`
 
-Example grant object:
-
-```json
-{
-  "grantId": "g_123",
-  "subject": "agent:*",
-  "tools": ["repo.read"],
-  "access": "approval_required",
-  "approvers": ["alice@example.com"],
-  "scope": { "repo": "acme/demo" },
-  "createdAt": "2026-03-11T12:00:00Z"
-}
-```
-
-### 11.6 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}/grants/{grantId}`
+### 10.6 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/tools/{tool}/grants/{grantId}`
 
 Removes a grant.
 
 Approval outcomes are visible both on the topic event stream and in the managed
 tool log.
 
+## 11. File API
+
+The current Shelley-backed profile exposes a provisional workspace file surface
+at:
+
+```text
+/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files
+/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/content
+/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/directories
+/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/move
+```
+
+This profile is part of the current API surface, but it is not yet considered
+as settled as the workspace, topic, and run model.
+
+All file paths are workspace-relative. Absolute paths, backslashes, and
+traversal segments such as `..` are invalid.
+
+### 11.1 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files?path={relative-path}`
+
+Returns JSON metadata for the addressed file or directory. Directory responses
+also include their direct child entries.
+
+### 11.2 GET `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/content?path={relative-path}`
+
+Reads the addressed file and returns raw file content.
+
+### 11.3 PUT `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/content?path={relative-path}`
+
+Writes raw request content to the addressed file path.
+
+### 11.4 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/directories?path={relative-path}`
+
+Creates a directory.
+
+### 11.5 POST `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files/move`
+
+Moves or renames a file or directory.
+
+Example request:
+
+```json
+{
+  "from": "docs/note.txt",
+  "to": "docs/archive/note.txt"
+}
+```
+
+### 11.6 DELETE `/apis/v1/namespaces/{namespace}/workspaces/{workspace}/files?path={relative-path}[&recursive=true]`
+
+Deletes the addressed file or directory.
+
 ## 12. Namespace Event Stream
 
 ### 12.1 GET `wss://.../apis/v1/namespaces/{namespace}/events`
 
-This is the namespace-scoped manager lifecycle stream.
+This is the namespace-scoped lifecycle stream.
 
-Example initial message:
-
-```json
-{
-  "type": "authenticated",
-  "actor": {
-    "id": "user_123",
-    "displayName": "Alice Example"
-  }
-}
-```
+Example connection acknowledgement:
 
 ```json
 {
@@ -966,8 +986,8 @@ Example initial message:
 }
 ```
 
-After `authenticated` and `connected`, the server replays current workspaces as
-`workspace_created` events.
+After authentication and connection acknowledgement, the server replays current
+workspaces as `workspace_created` events.
 
 ### 12.2 Event Types
 
@@ -1023,21 +1043,20 @@ Topic deleted:
 }
 ```
 
-This stream is read-only. The protocol does not define event-id resume.
+This stream is read-only. The protocol does not yet define event-id resume.
 
 ## 13. Explicitly Not Part Of The Contract
 
 This document does not commit to:
 
-- `/acp/...` route aliases
-- `/workspaces/...` route aliases
+- route aliases such as `/acp/...` or `/workspaces/...`
 - internal runtime `/ws/...` routes
-- client-supplied prompt IDs or inject IDs
+- client-supplied run IDs or inject IDs
 - client-supplied participant IDs in custom headers or cookies
 - JSON-RPC over the topic WebSocket
 - a standalone approval resource
-- the manager-local `/apis/v1/local-tools` catalog
-- local-runtime tool selection or provisioning APIs
-- internal manager-to-runtime hosting details
+- manager-local tool selection or provisioning APIs
+- internal host-to-runtime transport details
+- deployment topology or process boundaries
 - suspend, resume, clone, commit, snapshot, or rollback APIs
 - operational endpoints such as `/health`
