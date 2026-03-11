@@ -22,8 +22,8 @@
  */
 
 const MANAGER = process.env.WS_MANAGER || "http://localhost:31337";
-const WS_CLIENT_ID =
-  process.env.WS_CLIENT_ID ||
+let clientId =
+  process.env.clientId ||
   `cli-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const [cmd, ...args] = process.argv.slice(2);
@@ -63,14 +63,14 @@ async function wsApi(name: string): Promise<string> {
 }
 
 function requestHeaders() {
-  return { "X-Workspace-Client-ID": WS_CLIENT_ID };
+  return { "X-Workspace-Client-ID": clientId };
 }
 
 function nextPromptIdFactory() {
   let counter = 0;
   return () => {
     counter += 1;
-    return `p_${WS_CLIENT_ID}_${counter}`;
+    return `p_${clientId}_${counter}`;
   };
 }
 
@@ -241,95 +241,96 @@ async function connect(name: string, topic = "general") {
 
   // Build ACP URL: ws://host:port/acp/<topic>
   const acpBase = ws.acp.replace(/\/acp$/, "");
-  const acpUrl = `${acpBase}/acp/${topic}?client_id=${encodeURIComponent(WS_CLIENT_ID)}`;
   const apiBase = ws.api;
-  console.log(`Connecting to ${acpUrl}...`);
-  console.log(`Using participant id ${WS_CLIENT_ID}`);
-
-  const socket = new WebSocket(acpUrl);
   let connected = false;
+  let reconnecting = false;
   const nextPromptId = nextPromptIdFactory();
   const nextInjectId = nextPromptIdFactory();
   const promptStates = new Map<string, string>();
   const ownPrompts: string[] = [];
   const ownQueuedPromptIds = () => ownPrompts.filter((candidate) => promptStates.get(candidate) === "queued");
 
-  socket.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    switch (msg.type) {
-      case "system":
-        console.log(`\x1b[90m[system] ${msg.data}\x1b[0m`);
-        break;
-      case "connected":
-        connected = true;
-        console.log(`\x1b[32mConnected to topic "${msg.topic}" (session ${msg.sessionId}, ${msg.protocolVersion || "unknown"})\x1b[0m`);
-        console.log(`Type a message and press Enter. /quit to disconnect.\n`);
-        promptInput();
-        break;
-      case "queue_snapshot":
-        printQueueSnapshot(msg);
-        break;
-      case "prompt_status":
-        promptStates.set(msg.promptId, msg.status);
-        console.log(`\x1b[90m[prompt] ${msg.promptId} ${msg.status}${msg.position ? ` (#${msg.position})` : ""}${msg.data ? `: ${msg.data}` : ""}\x1b[0m`);
-        break;
-      case "inject_status":
-        console.log(`\x1b[90m[inject] ${msg.injectId} ${msg.status}${msg.reason ? ` (${msg.reason})` : ""}\x1b[0m`);
-        break;
-      case "user":
-        if (msg.injected) {
-          console.log(`\x1b[35m[inject:${msg.injectId || "?"}] ${msg.data}\x1b[0m`);
-        } else {
-          console.log(`\x1b[36m[user] ${msg.data}\x1b[0m`);
-        }
-        break;
-      case "text":
-        process.stdout.write(msg.data);
-        break;
-      case "tool_call":
-        console.log(`\x1b[33m[tool] ${msg.title} (${msg.status})\x1b[0m`);
-        break;
-      case "tool_update":
-        console.log(`\x1b[33m[tool] ${msg.title || msg.toolCallId} ${msg.status || "updated"}\x1b[0m`);
-        if (msg.data) {
-          console.log(msg.data);
-        }
-        break;
-      case "done":
-        if (msg.status === "interrupted") {
-          console.log(`\n\x1b[90m--- interrupted ${msg.promptId || ""}${msg.reason ? `: ${msg.reason}` : ""}\x1b[0m`);
-        } else {
-          console.log(`\n\x1b[90m--- ${msg.status || "done"} ${msg.promptId || ""}\x1b[0m`);
-        }
-        promptInput();
-        break;
-      case "error":
-        if (msg.promptId) {
-          console.error(`\x1b[31m[error] ${msg.promptId}: ${msg.data}\x1b[0m`);
-        } else {
-          console.error(`\x1b[31m[error] ${msg.data}\x1b[0m`);
-        }
-        promptInput();
-        break;
-      case "queue_entry_removed":
-        console.log(`\x1b[90m[queue] removed ${msg.promptId} (${msg.reason || "removed"})\x1b[0m`);
-        break;
-      case "queue_entry_updated":
-        console.log(`\x1b[90m[queue] updated ${msg.promptId} (#${msg.position || "?"})\x1b[0m`);
-        break;
-      case "queue_entry_moved":
-        console.log(`\x1b[90m[queue] moved ${msg.promptId} ${msg.direction || ""} (#${msg.position || "?"})\x1b[0m`);
-        break;
-      case "queue_cleared":
-        console.log(`\x1b[90m[queue] cleared ${Array.isArray(msg.removed) ? msg.removed.join(", ") : ""}\x1b[0m`);
-        break;
-      default:
-        console.log(`[${msg.type}]`, msg.data || "");
-    }
-  };
+  function buildAcpUrl() {
+    return `${acpBase}/acp/${topic}?client_id=${encodeURIComponent(clientId)}`;
+  }
 
-  socket.onerror = () => { console.error("WebSocket error"); process.exit(1); };
-  socket.onclose = () => { console.log("\nDisconnected."); process.exit(0); };
+  function setupSocket(ws: WebSocket) {
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case "system":
+          console.log(`\x1b[90m[system] ${msg.data}\x1b[0m`);
+          break;
+        case "connected":
+          connected = true;
+          console.log(`\x1b[32mConnected to topic "${msg.topic}" (session ${msg.sessionId}, ${msg.protocolVersion || "unknown"})\x1b[0m`);
+          console.log(`Type a message and press Enter. /help for commands, /quit to disconnect.\n`);
+          promptInput();
+          break;
+        case "queue_snapshot":
+          printQueueSnapshot(msg);
+          break;
+        case "prompt_status":
+          promptStates.set(msg.promptId, msg.status);
+          console.log(`\x1b[90m[prompt] ${msg.promptId} ${msg.status}${msg.position ? ` (#${msg.position})` : ""}${msg.data ? `: ${msg.data}` : ""}\x1b[0m`);
+          break;
+        case "inject_status":
+          console.log(`\x1b[90m[inject] ${msg.injectId} ${msg.status}${msg.reason ? ` (${msg.reason})` : ""}\x1b[0m`);
+          break;
+        case "user":
+          console.log(`\x1b[36m[user] ${msg.data}\x1b[0m`);
+          break;
+        case "text":
+          process.stdout.write(msg.data);
+          break;
+        case "tool_call":
+          console.log(`\x1b[33m[tool] ${msg.title} (${msg.status})\x1b[0m`);
+          break;
+        case "tool_update":
+          console.log(`\x1b[33m[tool] ${msg.title || msg.toolCallId} ${msg.status || "updated"}\x1b[0m`);
+          if (msg.data) {
+            console.log(msg.data);
+          }
+          break;
+        case "done":
+          if (msg.status === "interrupted") {
+            console.log(`\n\x1b[90m--- interrupted${msg.reason ? `: ${msg.reason}` : ""}\x1b[0m`);
+          } else {
+            console.log(`\n\x1b[90m--- ${msg.status || "done"}\x1b[0m`);
+          }
+          promptInput();
+          break;
+        case "error":
+          console.error(`\x1b[31m[error] ${msg.data}\x1b[0m`);
+          promptInput();
+          break;
+        case "queue_entry_removed":
+          console.log(`\x1b[90m[queue] removed ${msg.promptId} (${msg.reason || "removed"})\x1b[0m`);
+          break;
+        case "queue_entry_updated":
+          console.log(`\x1b[90m[queue] updated ${msg.promptId} (#${msg.position || "?"})\x1b[0m`);
+          break;
+        case "queue_entry_moved":
+          console.log(`\x1b[90m[queue] moved ${msg.promptId} ${msg.direction || ""} (#${msg.position || "?"})\x1b[0m`);
+          break;
+        case "queue_cleared":
+          console.log(`\x1b[90m[queue] cleared ${Array.isArray(msg.removed) ? msg.removed.join(", ") : ""}\x1b[0m`);
+          break;
+        default:
+          console.log(`[${msg.type}]`, msg.data || "");
+      }
+    };
+    ws.onerror = () => { console.error("WebSocket error"); process.exit(1); };
+    ws.onclose = () => {
+      if (reconnecting) return;
+      console.log("\nDisconnected.");
+      process.exit(0);
+    };
+  }
+
+  console.log(`Connecting as ${clientId}...`);
+  let socket = new WebSocket(buildAcpUrl());
+  setupSocket(socket);
 
   function promptInput() {
     process.stdout.write(`\x1b[36m[${topic}]> \x1b[0m`);
@@ -451,6 +452,41 @@ async function connect(name: string, topic = "general") {
       const text = line.trim();
       if (!text) continue;
       if (text === "/quit" || text === "/exit") { socket.close(); process.exit(0); }
+      if (text === "/help" || text === "/?") {
+        console.log(`
+\x1b[1mPrompts & Queue\x1b[0m
+  <text>                Send a prompt (queued behind any active turn)
+  /next <text>          Send a prompt to the \x1b[1mfront\x1b[0m of the queue
+  /queue                Show the current queue
+  /cancel <id|last>     Cancel a queued prompt
+  /edit <id|last> <text>  Replace the text of a queued prompt
+  /up <id|last>         Move a queued prompt up one position
+  /down <id|last>       Move a queued prompt down one position
+  /top <id|last>        Move a queued prompt to the front
+  /bottom <id|last>     Move a queued prompt to the back
+  /clear                Clear all \x1b[1myour\x1b[0m queued prompts
+
+\x1b[1mActive Turn\x1b[0m
+  /inject <text>        Send guidance into the running turn (mid-turn)
+  /interrupt <reason>   Stop the active turn and move to the next prompt
+
+\x1b[1mOther\x1b[0m
+  /name <name>          Change your display name (reconnects)
+  /whoami               Show your participant ID
+  /quit                 Disconnect
+
+\x1b[1mExamples\x1b[0m
+  Hello, please summarize this repo          \x1b[90m# queued prompt\x1b[0m
+  /next Fix the typo in README first         \x1b[90m# jump the queue\x1b[0m
+  /inject Also check the tests               \x1b[90m# mid-turn guidance\x1b[0m
+  /interrupt Wrong approach, let me rethink   \x1b[90m# stop current turn\x1b[0m
+  /cancel last                               \x1b[90m# cancel your last queued prompt\x1b[0m
+  /edit last Use Python instead of Go         \x1b[90m# edit your last queued prompt\x1b[0m
+  /name JoshM                                \x1b[90m# change your display name\x1b[0m
+`);
+        promptInput();
+        continue;
+      }
       if (text === "/queue") {
         await showQueue();
         promptInput();
@@ -514,8 +550,25 @@ async function connect(name: string, topic = "general") {
         continue;
       }
       if (text === "/whoami") {
-        console.log(`participant ${WS_CLIENT_ID}`);
+        console.log(`participant ${clientId}`);
         promptInput();
+        continue;
+      }
+      if (text.startsWith("/name ") || text.startsWith("/nick ")) {
+        const newName = text.slice(text.indexOf(" ") + 1).trim();
+        if (!newName) {
+          console.error("Usage: /name <name>");
+          promptInput();
+          continue;
+        }
+        clientId = newName;
+        console.log(`\x1b[90mReconnecting as ${clientId}...\x1b[0m`);
+        reconnecting = true;
+        connected = false;
+        socket.close();
+        socket = new WebSocket(buildAcpUrl());
+        setupSocket(socket);
+        reconnecting = false;
         continue;
       }
       if (!connected) continue;

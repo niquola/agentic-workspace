@@ -130,11 +130,15 @@ Required fields:
 - `name`
 - `protocol`
 - `transport`
+
+Optional fields:
 - `tools`
 
 For the demo:
 - `protocol` must be `"mcp"`
-- `tools` must be a non-empty array of MCP tool definition objects
+- `tools`, when provided, must be an array of MCP tool definition objects
+- when `tools` is omitted, tool capabilities are discovered at runtime via the
+  MCP transport (the MCP server's `tools/list` is the source of truth)
 
 ### MCP tool object shape
 
@@ -197,6 +201,18 @@ Meaning:
 
 The canonical transport definition still lives under `transport`.
 
+Write semantics:
+- `POST /tools` accepts the full transport object, including concrete `env` and
+  `headers` values
+
+Read semantics:
+- `POST /tools` responses and subsequent `GET /tools*` responses must return a
+  redacted read model for sensitive transport fields
+- `transport.env` and `transport.headers` keep their keys but must not expose
+  original values
+- implementations may preserve non-sensitive transport fields like `command`,
+  `args`, `cwd`, `type`, and `url`
+
 ## Transport Union
 
 ### MCP stdio
@@ -229,7 +245,7 @@ through a manager. In both cases:
 - absolute runtime paths such as `/tools/...` are interpreted relative to the
   workspace runtime filesystem contract
 - secret-bearing environment values must not be exposed back to workspace
-  clients through `GET /tools`
+  clients through tool read responses
 
 Demo-proven example:
 
@@ -247,6 +263,35 @@ Demo-proven example:
 
 This shape is useful both for workspace-local MCP fixtures and for
 manager-brokered MCP servers that rely on manager-published support bundles.
+
+Demo-proven HL7 Jira registration (transport-only, tools discovered via MCP):
+
+```json
+{
+  "name": "hl7-jira",
+  "description": "Search and inspect issues from the real HL7 Jira SQLite snapshot",
+  "protocol": "mcp",
+  "transport": {
+    "type": "stdio",
+    "command": "bun",
+    "args": ["/tools/hl7-jira-support/bin/hl7-jira-mcp.js"],
+    "cwd": "/tools/hl7-jira-support",
+    "env": {
+      "HL7_JIRA_DB": "/tools/hl7-jira-support/data/jira-data.db"
+    }
+  }
+}
+```
+
+With a wildcard grant:
+
+```json
+{
+  "subject": "agent:*",
+  "tools": ["*"],
+  "access": "allowed"
+}
+```
 
 ### MCP streamable HTTP
 
@@ -271,7 +316,12 @@ The demo contract supports exactly these two MCP transport types.
 
 ## Tool Response Shape
 
-`POST /tools` returns the same full object shape as `GET /tools/{tool}`.
+`POST /tools` returns the same read shape as `GET /tools/{tool}`.
+
+Important:
+- create requests are write-capable and may include concrete `env` or `headers`
+  values
+- read responses are redacted and must not echo those values back
 
 ### Summary shape
 
@@ -288,7 +338,9 @@ The demo contract supports exactly these two MCP transport types.
       "type": "stdio",
       "command": "uvx",
       "args": ["mcp-server-github"],
-      "env": {}
+      "env": {
+        "GITHUB_TOKEN": { "redacted": true }
+      }
     },
     "tools": [
       {
@@ -328,7 +380,9 @@ The demo contract supports exactly these two MCP transport types.
     "type": "stdio",
     "command": "uvx",
     "args": ["mcp-server-github"],
-    "env": {}
+    "env": {
+      "GITHUB_TOKEN": { "redacted": true }
+    }
   },
   "tools": [
     {
@@ -387,7 +441,9 @@ Rules:
 
 Rules:
 - `subject` is required
-- `tools` must be a non-empty subset of the registered nested MCP tool names
+- `tools` must be a non-empty array of tool names — either a subset of the
+  registered nested MCP tool names, or `["*"]` to grant access to all tools
+  exposed by the MCP server (useful when `tools` was omitted at registration)
 - `access` must be one of:
   - `allowed`
   - `approval_required`
@@ -420,7 +476,8 @@ This RFC defines the demo guarantee as:
 ## Non-Goals For This Contract
 
 Explicitly deferred:
-- registry sync or remote tool mirroring
+- registry sync or remote tool mirroring (though `tools` omission enables
+  runtime MCP discovery)
 - opaque `toolId` separate from `name`
 - secret-management standardization beyond opaque `credentialRef` and transport
   placeholders
