@@ -33,7 +33,11 @@ export function mintUnsignedJWT(subject: string, displayName: string): string {
 export function decodeJWTPayload(token: string): Record<string, unknown> {
   const [, payload = ""] = token.split(".");
   if (!payload) return {};
-  return JSON.parse(decodeBase64URL(payload));
+  try {
+    return JSON.parse(decodeBase64URL(payload));
+  } catch {
+    return {};
+  }
 }
 
 export function actorFromToken(token: string): Actor | null {

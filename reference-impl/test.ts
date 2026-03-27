@@ -87,7 +87,7 @@ async function main() {
     }
     if (message.type === "connected") {
       connected = true;
-      ws.send(JSON.stringify({ type: "prompt", data: "say hello in one word" }));
+      ws.send(JSON.stringify({ type: "submit_run", text: "say hello in one word" }));
       return;
     }
     if (message.type === "run_updated" && message.state === "running") {

@@ -55,12 +55,19 @@ export interface ManagedTool {
   grants: ManagedToolGrant[];
 }
 
+export interface WorkspaceOwner {
+  id: string;
+  displayName: string;
+}
+
 export interface WorkspaceSummary {
   id: string;
   namespace: string;
   name: string;
   status: "starting" | "running" | "stopped" | "deleted";
   createdAt: string;
+  containerId?: string;
+  owner?: WorkspaceOwner;
 }
 
 export interface WorkspaceDetail extends WorkspaceSummary {

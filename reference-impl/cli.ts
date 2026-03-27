@@ -534,7 +534,7 @@ async function connect(name: string, topic = "general") {
   }
 
   function sendPrompt(text: string, position?: number) {
-    socket.send(JSON.stringify({ type: "prompt", data: text, ...(position === undefined ? {} : { position }) }));
+    socket.send(JSON.stringify({ type: "submit_run", text, ...(position === undefined ? {} : { position }) }));
   }
 
   function sendInject(text: string) {

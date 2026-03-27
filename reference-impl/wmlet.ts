@@ -7,7 +7,9 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { basename, dirname, join, normalize, resolve } from "node:path";
+import { listDir, isTextFile, FileSidebar, FileContentView } from "./ui/files.tsx";
 import { Readable, Writable } from "node:stream";
 import {
   ClientSideConnection,
@@ -34,7 +36,23 @@ const PORT = parseInt(process.env.WMLET_PORT || process.env.PORT || "31337", 10)
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || "/workspace";
 const BIN_DIR = `${process.cwd()}/node_modules/.bin`;
 
+// ── Log buffer for streaming ──
+const wmletLogs: string[] = [];
+const logSubscribers = new Set<(line: string) => void>();
+const MAX_LOG_LINES = 500;
+
+function wmLog(msg: string) {
+  const line = `[${new Date().toISOString().slice(11, 19)}] ${msg}`;
+  wmletLogs.push(line);
+  if (wmletLogs.length > MAX_LOG_LINES) wmletLogs.shift();
+  console.log(msg);
+  for (const sub of logSubscribers) sub(line);
+}
+
 type ClientSocket = any;
+
+// Active login processes waiting for auth code
+const loginProcesses = new Map<string, ReturnType<typeof Bun.spawn>>();
 type SocketData = {
   actor: Actor;
   topicName: string;
@@ -70,18 +88,18 @@ interface Topic {
 
 const topics = new Map<string, Topic>();
 
-function jsonError(error: string, status = 400): Response {
+export function jsonError(error: string, status = 400): Response {
   return Response.json({ error }, { status });
 }
 
-function cleanEnv(): Record<string, string> {
+export function cleanEnv(): Record<string, string> {
   const env = { ...process.env } as Record<string, string>;
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_SESSION;
   return env;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
@@ -90,7 +108,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-function randomId(prefix: string): string {
+export function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -144,7 +162,7 @@ function summary(topic: Topic) {
   };
 }
 
-function replayable(event: TopicEvent): boolean {
+export function replayable(event: TopicEvent): boolean {
   return event.type === "run_updated"
     || event.type === "message"
     || event.type === "tool_call"
@@ -197,7 +215,7 @@ function emitMessage(topic: Topic, event: Record<string, unknown>) {
   broadcast(topic, { ...event, type: "message" });
 }
 
-function toolUpdateData(value: unknown): string | undefined {
+export function toolUpdateData(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return value;
   try {
@@ -207,7 +225,7 @@ function toolUpdateData(value: unknown): string | undefined {
   }
 }
 
-function describeError(error: unknown): string {
+export function describeError(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   if (error && typeof error === "object") {
@@ -242,7 +260,7 @@ async function createTopic(name: string): Promise<Topic> {
 
   proc.stderr?.on("data", (chunk: Buffer) => {
     const line = chunk.toString().trim();
-    if (line) console.error(`[${name}:stderr] ${line}`);
+    if (line) wmLog(`[${name}:stderr] ${line}`);
   });
 
   if (!proc.stdin || !proc.stdout) {
@@ -268,6 +286,11 @@ async function createTopic(name: string): Promise<Topic> {
           const text = update.content?.text;
           if (text && run) {
             run.assistantText += text;
+            broadcast(topic, {
+              type: "text_chunk",
+              runId,
+              text,
+            });
           }
           break;
         }
@@ -307,7 +330,7 @@ async function createTopic(name: string): Promise<Topic> {
   };
 
   const connection = new ClientSideConnection(() => clientImpl, stream);
-  await withTimeout(
+  const initResult = await withTimeout(
     connection.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
@@ -352,7 +375,7 @@ async function createTopic(name: string): Promise<Topic> {
   return topic;
 }
 
-function runStateFromStopReason(stopReason: StopReason): RunState {
+export function runStateFromStopReason(stopReason: StopReason): RunState {
   if (stopReason === "end_turn") return "completed";
   if (stopReason === "cancelled") return "cancelled";
   return "failed";
@@ -502,7 +525,7 @@ function ensureInternalActor(req: Request): Actor {
   return actor;
 }
 
-function relativeWorkspacePath(input: string | null): string {
+export function relativeWorkspacePath(input: string | null): string {
   const raw = (input ?? "").trim();
   if (!raw) return "";
   if (raw.includes("\\")) throw jsonError("invalid path", 400);
@@ -515,7 +538,7 @@ function relativeWorkspacePath(input: string | null): string {
   return normalized;
 }
 
-function workspacePath(relativePath: string) {
+export function workspacePath(relativePath: string) {
   const fullPath = resolve(WORKSPACE_DIR, relativePath);
   const root = resolve(WORKSPACE_DIR);
   if (fullPath !== root && !fullPath.startsWith(`${root}/`)) {
@@ -551,6 +574,10 @@ async function fileInfo(relativePath: string) {
   return { ...base, entries };
 }
 
+const isMainModule = typeof Bun !== "undefined" && Bun.main === import.meta.path;
+
+if (isMainModule) {
+
 const server = Bun.serve<SocketData>({
   port: PORT,
   async fetch(req, server) {
@@ -577,7 +604,251 @@ const server = Bun.serve<SocketData>({
         status: "ok",
         workspaceDir: WORKSPACE_DIR,
         topics: [...topics.keys()],
+        claudeAuthenticated: hasClaudeCredentials(),
       });
+    }
+
+    // Set Claude token — accepts setup-token (sk-*) or CLAUDE_CODE_OAUTH_TOKEN
+    if (url.pathname === "/internal/auth/token" && req.method === "POST") {
+      const body = await req.json() as { token?: string };
+      const token = String(body.token ?? "").trim();
+      if (!token) return jsonError("token required", 400);
+      try {
+        wmLog("[login] Setting up Claude token...");
+        const home = process.env.HOME || "/home/developer";
+
+        // Write credentials to persistent volume (~/.claude/)
+        const credDir = join(home, ".claude");
+        await mkdir(credDir, { recursive: true });
+        const credPath = join(credDir, ".credentials.json");
+        await writeFile(credPath, JSON.stringify({
+          claudeAiOauth: {
+            accessToken: token,
+            expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year
+            scopes: ["user:inference", "user:profile", "user:sessions:claude_code", "user:mcp_servers"],
+          }
+        }), { mode: 0o600 });
+
+        // Write .claude.json to skip onboarding
+        const claudeJson = join(home, ".claude.json");
+        await writeFile(claudeJson, JSON.stringify({
+          hasCompletedOnboarding: true,
+          lastOnboardingVersion: "2.0.0",
+        }));
+
+        // Also set env var for current process
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+
+        // Verify token works
+        wmLog("[login] Verifying token...");
+        const proc = Bun.spawn({
+          cmd: ["claude", "-p", "say ok"],
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token, HOME: home },
+        });
+        const exitCode = await Promise.race([
+          proc.exited,
+          new Promise<number>(r => setTimeout(() => r(-1), 30_000)),
+        ]);
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+        if (exitCode === 0 && stdout.trim()) {
+          wmLog("[login] Token verified and saved to disk!");
+          return Response.json({ ok: true, authenticated: true });
+        }
+        wmLog(`[login] Token verification failed (exit=${exitCode}): ${stderr.trim()}`);
+        return Response.json({ ok: false, error: `Token verification failed: ${stderr.trim().slice(0, 200)}` }, { status: 400 });
+      } catch (e) {
+        wmLog(`[login] Token setup error: ${e}`);
+        return jsonError(`token setup failed: ${e}`, 500);
+      }
+    }
+
+    // Start Claude login — spawn `claude auth login`, capture the auth URL + code flow
+    if (url.pathname === "/internal/auth/login" && req.method === "POST") {
+      try {
+        wmLog("[login] Starting claude setup-token...");
+        const proc = Bun.spawn({
+          cmd: ["claude", "setup-token"],
+          stdout: "pipe",
+          stderr: "pipe",
+          stdin: "pipe",
+          env: { ...process.env, BROWSER: "echo" },
+        });
+
+        // Read output looking for the auth URL
+        let output = "";
+        const reader = proc.stdout.getReader();
+        const deadline = Date.now() + 15_000;
+
+        while (Date.now() < deadline) {
+          const { value, done } = await Promise.race([
+            reader.read(),
+            new Promise<{ value: undefined; done: true }>(r => setTimeout(() => r({ value: undefined, done: true }), 2000)),
+          ]);
+          if (done && !value) break;
+          if (value) output += new TextDecoder().decode(value);
+          const urlMatch = output.match(/(https:\/\/[^\s]+)/);
+          if (urlMatch) {
+            reader.releaseLock();
+            const sessionId = `login_${Date.now()}`;
+            loginProcesses.set(sessionId, proc);
+            proc.exited.then(() => loginProcesses.delete(sessionId));
+            wmLog("[login] Got setup-token URL");
+            return Response.json({ loginUrl: urlMatch[1], sessionId, method: "setup-token" });
+          }
+        }
+
+        reader.releaseLock();
+        proc.kill();
+        // Fallback: try claude auth login
+        wmLog("[login] setup-token didn't produce URL, trying auth login...");
+        const proc2 = Bun.spawn({
+          cmd: ["claude", "auth", "login"],
+          stdout: "pipe", stderr: "pipe", stdin: "pipe",
+          env: { ...process.env, BROWSER: "echo" },
+        });
+        let output2 = "";
+        const reader2 = proc2.stdout.getReader();
+        const deadline2 = Date.now() + 15_000;
+        while (Date.now() < deadline2) {
+          const { value, done } = await Promise.race([
+            reader2.read(),
+            new Promise<{ value: undefined; done: true }>(r => setTimeout(() => r({ value: undefined, done: true }), 2000)),
+          ]);
+          if (done && !value) break;
+          if (value) output2 += new TextDecoder().decode(value);
+          const urlMatch = output2.match(/(https:\/\/[^\s]+)/);
+          if (urlMatch) {
+            reader2.releaseLock();
+            const sessionId = `login_${Date.now()}`;
+            loginProcesses.set(sessionId, proc2);
+            proc2.exited.then(() => loginProcesses.delete(sessionId));
+            wmLog("[login] Got auth login URL");
+            return Response.json({ loginUrl: urlMatch[1], sessionId, method: "auth-login" });
+          }
+        }
+        reader2.releaseLock();
+        proc2.kill();
+        return Response.json({ error: "could not start login", stdout: output.trim() + output2.trim() }, { status: 500 });
+      } catch (e) {
+        wmLog(`[login] Error: ${e}`);
+        return jsonError(`login failed: ${e}`, 500);
+      }
+    }
+
+    // Submit token from setup-token flow
+    if (url.pathname === "/internal/auth/code" && req.method === "POST") {
+      const body = await req.json() as { sessionId?: string; code?: string };
+      const sid = String(body.sessionId ?? "");
+      const code = String(body.code ?? "").trim();
+      if (!code) return jsonError("code/token required", 400);
+
+      // If it looks like a setup-token (sk-*), set it directly as env var
+      if (code.startsWith("sk-")) {
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = code;
+        wmLog("[login] Setup token set!");
+        return Response.json({ ok: true, authenticated: true });
+      }
+
+      // Otherwise try piping to the waiting process
+      const proc = sid ? loginProcesses.get(sid) : null;
+      if (proc) {
+        try {
+          wmLog("[login] Submitting code to process...");
+          proc.stdin.write(code + "\n");
+          proc.stdin.end();
+          const exitCode = await Promise.race([
+            proc.exited,
+            new Promise<number>(r => setTimeout(() => r(-1), 30_000)),
+          ]);
+          loginProcesses.delete(sid);
+          if (hasClaudeCredentials()) {
+            wmLog("[login] Authenticated!");
+            return Response.json({ ok: true, authenticated: true });
+          }
+          return Response.json({ ok: false, error: `auth failed (exit=${exitCode})` }, { status: 400 });
+        } catch (e) {
+          return jsonError(`code submission failed: ${e}`, 500);
+        }
+      }
+
+      return jsonError("no active login session", 404);
+    }
+
+    // Execute shell command in workspace dir
+    if (url.pathname === "/internal/exec" && req.method === "POST") {
+      const body = await req.json() as { command?: string };
+      const command = String(body.command ?? "").trim();
+      if (!command) return jsonError("command required", 400);
+      wmLog(`[exec] $ ${command}`);
+      try {
+        const proc = Bun.spawn({
+          cmd: ["bash", "-c", command],
+          cwd: WORKSPACE_DIR,
+          stdout: "pipe",
+          stderr: "pipe",
+          env: process.env,
+        });
+        const [exitCode, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        const output = (stdout + stderr).trim();
+        if (output) wmLog(`[exec] ${output.split("\n").slice(0, 5).join("\n")}`);
+        return Response.json({ exitCode, stdout: stdout.trim(), stderr: stderr.trim() });
+      } catch (e) {
+        return jsonError(`exec failed: ${e}`, 500);
+      }
+    }
+
+    // Check if a login process completed (credentials appeared)
+    if (url.pathname === "/internal/auth/status" && req.method === "GET") {
+      return Response.json({
+        authenticated: hasClaudeCredentials(),
+      });
+    }
+
+    // Stream container logs as SSE
+    if (url.pathname === "/internal/logs" && req.method === "GET") {
+      const stream = new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          // Send initial logs
+          for (const line of wmletLogs.slice(-100)) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(line)}\n\n`));
+          }
+          // Subscribe to new logs
+          const handler = (line: string) => {
+            try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(line)}\n\n`)); } catch {}
+          };
+          logSubscribers.add(handler);
+          // Cleanup on close
+          const interval = setInterval(() => {
+            try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { clearInterval(interval); logSubscribers.delete(handler); }
+          }, 15000);
+        },
+      });
+      return new Response(stream, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+      });
+    }
+
+    // Write credentials from external source (e.g. wsmanager OAuth flow)
+    if (url.pathname === "/internal/auth/credentials" && req.method === "POST") {
+      try {
+        const creds = await req.json();
+        const home = process.env.HOME || "/root";
+        const credPath = join(home, ".claude", ".credentials.json");
+        await mkdir(join(home, ".claude"), { recursive: true });
+        await writeFile(credPath, JSON.stringify(creds), { mode: 0o600 });
+        console.log("[wmlet] credentials written via API");
+        return Response.json({ ok: true });
+      } catch (e) {
+        return jsonError(`failed to write credentials: ${e}`, 500);
+      }
     }
 
     if (url.pathname === "/internal/topics" && req.method === "GET") {
@@ -589,6 +860,13 @@ const server = Bun.serve<SocketData>({
       const name = String(body.name ?? "").trim();
       if (!name) return jsonError("name required", 400);
       if (topics.has(name)) return jsonError("already exists", 409);
+      // Check Claude auth before spawning agent
+      if (!hasClaudeCredentials()) {
+        return Response.json({
+          error: "claude_not_authenticated",
+          message: "Claude is not authenticated. Please log in first.",
+        }, { status: 401 });
+      }
       const topic = await createTopic(name);
       return Response.json(summary(topic), { status: 201 });
     }
@@ -748,6 +1026,40 @@ const server = Bun.serve<SocketData>({
       return Response.json({ runId: run.runId, status: "accepted" });
     }
 
+    // ── /agents — list available agent harnesses (public API) ──
+    if (url.pathname === "/agents" && req.method === "GET") {
+      const agents: Array<{ id: string; name: string; description: string; command: string }> = [];
+
+      // Scan node_modules/.bin for ACP-compatible agents
+      const binDir = join(process.cwd(), "node_modules", ".bin");
+      try {
+        const bins = await readdir(binDir);
+        for (const bin of bins) {
+          if (bin.includes("agent") && bin.includes("acp")) {
+            const id = bin.replace(/-acp$/, "").replace(/^.*-agent-/, "");
+            agents.push({
+              id: bin,
+              name: id.charAt(0).toUpperCase() + id.slice(1),
+              description: `ACP agent: ${bin}`,
+              command: join(binDir, bin),
+            });
+          }
+        }
+      } catch {}
+
+      // Scan workspace for CLAUDE.md / AGENTS.md at root and subdirs
+      const instructions: Array<{ path: string; name: string }> = [];
+      for (const name of ["CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md"]) {
+        const fp = join(WORKSPACE_DIR, name);
+        try {
+          await stat(fp);
+          instructions.push({ path: name, name });
+        } catch {}
+      }
+
+      return Response.json({ agents, instructions });
+    }
+
     if (url.pathname === "/internal/files" && req.method === "GET") {
       const relativePath = relativeWorkspacePath(url.searchParams.get("path"));
       try {
@@ -806,6 +1118,66 @@ const server = Bun.serve<SocketData>({
       }
     }
 
+    // ── /resources — RESTful file browser ──
+    // GET  /resources/            — file tree sidebar partial
+    // GET  /resources/{path}      — file content (HTML partial or raw)
+    // PUT  /resources/{path}      — create/update file
+    // DELETE /resources/{path}    — delete file
+    const BROWSE_BASE = url.searchParams.get("base") || "/resources";
+    const UI_BASE = url.searchParams.get("ui") || undefined;
+    const resourceMatch = url.pathname.match(/^\/resources(?:\/(.*))?$/);
+
+    if (resourceMatch) {
+      const rawPath = resourceMatch[1] ?? "";
+      const rp = relativeWorkspacePath(rawPath || null) || "";
+      const tab = url.searchParams.get("tab") || undefined;
+      const accept = req.headers.get("accept") || "";
+
+      if (req.method === "GET" && !rawPath) {
+        // GET /resources/ — directory listing sidebar
+        const dirPath = url.searchParams.get("path") || "";
+        const dp = relativeWorkspacePath(dirPath || null) || "";
+        const files = await listDir(WORKSPACE_DIR, dp);
+        return new Response(
+          FileSidebar({ files, currentPath: dp, basePath: BROWSE_BASE, uiBase: UI_BASE }),
+          { headers: { "Content-Type": "text/html" } },
+        );
+      }
+
+      if (req.method === "GET" && rawPath) {
+        // GET /resources/{path} — file content
+        const fullPath = workspacePath(rp);
+        const name = basename(rp);
+        if (!isTextFile(name)) {
+          return new Response(Bun.file(fullPath));
+        }
+        const content = (await readFile(fullPath, "utf-8")).toString();
+        // Return HTML view by default; raw text only if explicitly requested
+        if (accept === "text/plain") {
+          return new Response(content, { headers: { "Content-Type": "text/plain" } });
+        }
+        return new Response(
+          await FileContentView({ filePath: rp, content, tab, basePath: BROWSE_BASE, uiBase: UI_BASE }),
+          { headers: { "Content-Type": "text/html" } },
+        );
+      }
+
+      if (req.method === "PUT" && rawPath) {
+        // PUT /resources/{path} — create or update file
+        const fullPath = workspacePath(rp);
+        await mkdir(dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, await req.text());
+        return new Response(null, { status: 204 });
+      }
+
+      if (req.method === "DELETE" && rawPath) {
+        // DELETE /resources/{path}
+        const fullPath = workspacePath(rp);
+        await rm(fullPath, { recursive: false, force: false });
+        return new Response(null, { status: 204 });
+      }
+    }
+
     return jsonError("not found", 404);
   },
 
@@ -853,10 +1225,10 @@ const server = Bun.serve<SocketData>({
       }
 
       switch (msg.type) {
-        case "prompt": {
-          const text = String(msg.data ?? "").trim();
+        case "submit_run": {
+          const text = String(msg.text ?? "").trim();
           if (!text) {
-            send(ws, { type: "error", data: "data required" });
+            send(ws, { type: "error", data: "text required" });
             return;
           }
           await submitRun(topic, actor, text, typeof msg.position === "number" ? msg.position : undefined);
@@ -908,5 +1280,42 @@ const server = Bun.serve<SocketData>({
   },
 });
 
-console.log(`[wmlet] listening on :${PORT}`);
-console.log(`[wmlet] workspace: ${WORKSPACE_DIR}`);
+// Check if Claude credentials exist locally
+function hasClaudeCredentials(): boolean {
+  // Check env var first (setup-token flow)
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return true;
+  // Check credentials file
+  const home = process.env.HOME || "/root";
+  const credPath = join(home, ".claude", ".credentials.json");
+  try {
+    const content = readFileSync(credPath, "utf-8");
+    const creds = JSON.parse(content);
+    return !!(creds?.claudeAiOauth?.accessToken);
+  } catch {
+    return false;
+  }
+}
+
+// No auto-provisioning — users log in via claude login inside the container
+// Load persisted token from credentials file into env if not already set
+if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && hasClaudeCredentials()) {
+  try {
+    const home = process.env.HOME || "/root";
+    const creds = JSON.parse(readFileSync(join(home, ".claude", ".credentials.json"), "utf-8"));
+    if (creds?.claudeAiOauth?.accessToken) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = creds.claudeAiOauth.accessToken;
+      wmLog("[wmlet] loaded token from persisted credentials");
+    }
+  } catch {}
+}
+
+if (hasClaudeCredentials()) {
+  wmLog("[wmlet] credentials present");
+} else {
+  wmLog("[wmlet] no credentials — use login to authenticate");
+}
+
+wmLog(`[wmlet] listening on :${PORT}`);
+wmLog(`[wmlet] workspace: ${WORKSPACE_DIR}`);
+
+} // end if (isMainModule)

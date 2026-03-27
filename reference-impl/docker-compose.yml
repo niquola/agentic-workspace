@@ -1,0 +1,29 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak-realm.json:/opt/keycloak/data/import/keycloak-realm.json:ro
+    ports:
+      - "8080:8080"
+
+  wsmanager:
+    build: .
+    entrypoint: ["bun", "run", "wsmanager.ts"]
+    environment:
+      PORT: "31337"
+      OAUTH_CLIENT_ID: workspace-ui
+      OAUTH_CLIENT_SECRET: workspace-secret
+      OAUTH_AUTHORIZE_URL: http://localhost:8080/realms/workspace/protocol/openid-connect/auth
+      OAUTH_TOKEN_URL: http://keycloak:8080/realms/workspace/protocol/openid-connect/token
+      OAUTH_USERINFO_URL: http://keycloak:8080/realms/workspace/protocol/openid-connect/userinfo
+      OAUTH_SCOPES: openid profile email
+    ports:
+      - "31337:31337"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - keycloak

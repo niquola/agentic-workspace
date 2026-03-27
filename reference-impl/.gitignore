@@ -32,3 +32,14 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# workspace runtime data (credentials, state)
+data/
+
+# generated CSS (rebuild: bun run css:build)
+public/styles/main.css
+
+# vendored JS (downloaded at setup)
+public/js/htmx.min.js
+public/js/datastar.js
+public/js/marked.min.js

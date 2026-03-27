@@ -3,95 +3,137 @@
 This directory contains a Bun-based reference implementation for the
 workspace/topic API in [RFC 0001](../rfcs/0001-workspace-topic-api-surface.md).
 
-It is split into:
+## Components
 
-- `wsmanager.ts`
-  The public API server. It owns authentication, the canonical
-  `/apis/v1/namespaces/{namespace}/...` surface, and public WebSocket
-  endpoints.
-- `wmlet.ts`
-  The per-workspace runtime inside a container. It speaks an internal API to
-  `wsmanager` and uses ACP only as its private execution engine.
-- `cli.ts`
-  A small client for creating workspaces, managing queues, and connecting to
-  topic event streams.
-
-## Status
-
-The current Bun reference implementation now follows the run-centric public
-model:
-
-- one active run per topic
-- queued future runs
-- `topic_state` as authoritative current state
-- `run_updated` and `message` on the topic WebSocket
-- canonical manager routes under `/apis/v1/namespaces/{namespace}/...`
-
-Current limitations:
-
-- `inject` is exposed, but this runtime rejects it because the ACP runtime used
-  underneath does not currently provide a true mid-run append primitive.
-- managed tool CRUD is implemented as manager-side state only; it is not yet
-  wired into runtime tool execution.
-- the file API is implemented and proxied through the manager, but it is still
-  a lightweight reference profile, not a hardened storage service.
+- `wsmanager.ts` — Public API server. Owns authentication, OAuth flow,
+  workspace lifecycle, and WebSocket bridging.
+- `wmlet.ts` — Per-workspace runtime inside a Docker container. Internal API
+  only; not a public surface.
+- `cli.ts` — CLI client for workspaces, queues, and topic event streams.
+- `ui.html` — Browser UI served at `/ui`. Single-page app with workspace/topic
+  management and live chat.
+- `auth.ts` — JWT minting/parsing, actor resolution.
+- `protocol.ts` — Shared types and URL helpers.
 
 ## Architecture
 
 ```text
-CLI / Browser
+Browser (ui.html)  /  CLI (cli.ts)
     |
     |  HTTP + WebSocket
     v
-wsmanager.ts
+wsmanager.ts (:31337)
     |
     |  internal HTTP + internal WebSocket
     v
-wmlet.ts (one per workspace container)
+wmlet.ts (one per workspace Docker container)
     |
     |  ACP over stdio
     v
 claude-agent-acp
 ```
 
-The public contract is owned by `wsmanager.ts`. `wmlet.ts` is an internal
-runtime, not a second public API surface.
+## Key Decisions
+
+### Run-centric protocol
+
+The protocol uses `submit_run` (not `prompt`) as the WebSocket message type.
+Each topic has one active run and a queue of pending runs. State is conveyed via
+`topic_state`, `run_updated`, `message`, and `text_chunk` events.
+
+### OAuth login via configurable provider
+
+Authentication supports any OAuth 2.0 / OpenID Connect provider (Keycloak,
+Google, GitHub, etc.) configured through environment variables. When OAuth is
+not configured, the system falls back to unsigned JWTs with a prompted display
+name.
+
+The flow:
+1. UI redirects to `GET /oauth/login` → provider authorization page
+2. Provider redirects back to `GET /oauth/callback?code=...`
+3. Manager exchanges code for access token, fetches userinfo, mints a session JWT
+4. Redirect to `/ui#token=<jwt>` — UI picks it up and stores in localStorage
+
+Relevant env vars (see `.env.example`):
+- `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`
+- `OAUTH_AUTHORIZE_URL`, `OAUTH_TOKEN_URL`, `OAUTH_USERINFO_URL`
+- `OAUTH_SCOPES` (default: `openid profile email`)
+
+### Keycloak as default identity provider
+
+`docker-compose.yml` includes a Keycloak instance with a pre-configured
+`workspace` realm, a confidential `workspace-ui` client, and a default user
+`admin/admin`. Realm config is imported from `keycloak-realm.json`.
+
+### Credential provisioning via HTTP (not volume mounts)
+
+Workspace containers do **not** mount host credential files. Instead:
+- Manager exposes `GET /internal/token` with raw Claude OAuth credentials
+- wmlet calls this endpoint at startup and writes `.credentials.json` locally
+- Containers receive `MANAGER_URL` env var pointing back to the manager
+
+This avoids host filesystem coupling and works in remote/CI environments.
+
+### Container-as-workspace with Docker labels
+
+Each workspace runs in a Docker container named `agrp-ws-{name}` with labels:
+- `agrp=workspace` — identifies the container as a workspace
+- `agrp.workspace={name}` — workspace name
+- `agrp.namespace={namespace}` — namespace
+- `agrp.owner.id={sub}` — owner's identity (from JWT `sub` claim)
+- `agrp.owner.name={displayName}` — owner's display name
+
+Labels survive container restarts and are queryable via `docker ps --filter`.
+The `/health` endpoint returns container info including owner.
+
+### Stale container cleanup
+
+Before `docker run`, the manager runs `docker rm -f` on the target container
+name. This prevents "name conflict" errors from stopped leftover containers.
+
+### Files API mapping
+
+The manager exposes a simplified files API that maps to wmlet's internal routes:
+- `PUT /files?path=X` → `PUT /internal/files/content?path=X` (write)
+- `GET /files?path=X&content=true` → `GET /internal/files/content?path=X` (read content)
+- `GET /files?path=X` → `GET /internal/files?path=X` (file info)
+- `DELETE /files?path=X` → `DELETE /internal/files?path=X` (delete)
+
+### Streaming text chunks
+
+wmlet broadcasts `text_chunk` events with incremental assistant text as it
+arrives from the ACP runtime. The UI uses these for live streaming display.
 
 ## Quick Start
 
 ```bash
+# Start Keycloak (identity provider)
+docker compose up keycloak -d
+
 # Build the runtime image
 docker build -t agrp-wmlet .
 
-# Start the public manager
+# Start the manager (reads .env for OAuth config)
 bun run wsmanager.ts
 
-# Create a workspace
-bun run ws create my-workspace general debug-timeout
-
-# Connect to a topic
-bun run ws connect my-workspace debug-timeout
+# Open browser
+open http://localhost:31337/ui
 ```
 
-## Model Runtime And Authentication
-
-This reference runtime uses the real `claude-agent-acp` adapter inside each
-workspace container. It is not a fake model.
-
-The easiest way to make it work is to launch `wsmanager.ts` from a shell where
-your Claude credentials are already available. The manager will:
-
-- pass through common Claude/Anthropic env vars such as `ANTHROPIC_API_KEY`
-  and `ANTHROPIC_AUTH_TOKEN`
-- mount local Claude auth/config files into the workspace container when it
-  finds them, including `~/.claude`, `~/.anthropic`, `~/.claude.json`, and
-  `~/.config/Claude`
-
-If you want explicit configuration, export a key before starting the manager:
+Or run everything in Docker:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
-bun run wsmanager.ts
+docker compose up -d
+```
+
+## Testing
+
+```bash
+# Integration tests (requires running manager + Docker)
+bun test wmlet.test.ts
+
+# Smoke test
+bun run test.ts
 ```
 
 ## CLI
@@ -102,85 +144,14 @@ bun run ws create <name> [topics...]
 bun run ws delete <name>
 bun run ws topics <name>
 bun run ws queue <name> <topic>
-bun run ws edit-queue <name> <topic> <runId> <text...>
-bun run ws move-queue <name> <topic> <runId> <up|down|top|bottom>
-bun run ws clear-queue <name> <topic>
-bun run ws inject <name> <topic> <text...>
-bun run ws interrupt <name> <topic> <reason...>
 bun run ws connect <name> [topic]
 bun run ws health
 ```
 
-Inside `connect`, plain text submits a run. `/next` queues at the front.
+## Current Limitations
 
-## Public Surface
-
-The manager exposes the canonical route family:
-
-```text
-/apis/v1/namespaces/{namespace}/workspaces
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}
-/apis/v1/namespaces/{namespace}/workspaces/{workspace}/topics/{topic}/events
-/apis/v1/namespaces/{namespace}/events
-```
-
-Supported REST areas in this reference profile:
-
-- workspaces
-- topics
-- queue mutation
-- interrupt
-- managed tool CRUD
-- provisional file API
-
-Topic WebSockets use the RFC 0001 message model:
-
-- client:
-  - `authenticate`
-  - `prompt`
-  - `inject`
-  - `interrupt`
-- server:
-  - `authenticated`
-  - `connected`
-  - `topic_state`
-  - `run_updated`
-  - `message`
-  - `tool_call`
-  - `tool_update`
-  - `inject_status`
-  - `interrupt_status`
-  - `error`
-
-## Authentication
-
-HTTP requests use:
-
-```text
-Authorization: Bearer <jwt>
-```
-
-Topic and namespace WebSockets authenticate with:
-
-```json
-{ "type": "authenticate", "token": "<jwt>" }
-```
-
-For the demo profile, unsigned JWTs (`alg: none`) are accepted so local runs
-do not require key management.
-
-## Sanity Checks
-
-Static check:
-
-```bash
-bunx tsc --noEmit
-```
-
-Basic runtime smoke against a running manager:
-
-```bash
-bun run test.ts
-```
+- `inject` is exposed but rejected — the ACP runtime does not support mid-run
+  append.
+- Managed tool CRUD is manager-side state only; not wired into runtime tool
+  execution.
+- The file API is a lightweight reference, not a hardened storage service.

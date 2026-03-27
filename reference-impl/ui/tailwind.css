@@ -1,0 +1,103 @@
+@import "tailwindcss" source(none);
+@plugin "@tailwindcss/typography";
+@source "./**/*.tsx";
+
+/* Dialog */
+dialog {
+  @apply m-auto border-none rounded-lg p-0 shadow-xl;
+}
+dialog::backdrop {
+  @apply bg-black/30;
+}
+
+/* Spinner */
+.spinner {
+  @apply inline-block w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin;
+}
+
+/* htmx indicators */
+.htmx-indicator {
+  @apply hidden;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  @apply inline-block;
+}
+
+/* Font Awesome (solid only — local webfonts) */
+@font-face {
+  font-family: "Font Awesome 6 Free";
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+  src: url(/webfonts/fa-solid-900.woff2) format("woff2"),
+       url(/webfonts/fa-solid-900.ttf) format("truetype");
+}
+@font-face {
+  font-family: "Font Awesome 6 Free";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url(/webfonts/fa-regular-400.woff2) format("woff2"),
+       url(/webfonts/fa-regular-400.ttf) format("truetype");
+}
+.fa, .fas, .fa-solid {
+  font-family: "Font Awesome 6 Free";
+  font-weight: 900;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  display: inline-block;
+}
+.fa-regular, .far {
+  font-family: "Font Awesome 6 Free";
+  font-weight: 400;
+}
+.fa-plus::before { content: "\f067"; }
+.fa-folder::before { content: "\f07b"; }
+.fa-file::before { content: "\f15b"; }
+.fa-comments::before { content: "\f086"; }
+.fa-terminal::before { content: "\f120"; }
+.fa-gear::before, .fa-cog::before { content: "\f013"; }
+.fa-play::before { content: "\f04b"; }
+.fa-stop::before { content: "\f04d"; }
+.fa-chevron-right::before { content: "\f054"; }
+.fa-chevron-down::before { content: "\f078"; }
+.fa-xmark::before, .fa-times::before { content: "\f00d"; }
+.fa-robot::before { content: "\f544"; }
+.fa-circle-info::before { content: "\f05a"; }
+.fa-code::before { content: "\f121"; }
+
+/* Markdown preview — Shiki code blocks + typography tweaks */
+.md-preview {
+  & pre {
+    @apply p-4 rounded-lg overflow-x-auto my-4;
+  }
+  & pre code {
+    @apply text-[13px] bg-transparent p-0;
+  }
+  & :not(pre) > code {
+    @apply text-sm bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700;
+  }
+  & code::before,
+  & code::after {
+    @apply content-none;
+  }
+  & blockquote {
+    @apply border-l-4 border-indigo-300 bg-indigo-50/50 rounded-r-lg px-4 py-2 not-italic;
+  }
+  & h1 {
+    @apply pb-2 border-b border-gray-200;
+  }
+  & a {
+    @apply text-indigo-600 no-underline;
+  }
+  & a:hover {
+    @apply underline;
+  }
+  & th {
+    @apply bg-gray-50;
+  }
+  & img {
+    @apply rounded-lg;
+  }
+}
