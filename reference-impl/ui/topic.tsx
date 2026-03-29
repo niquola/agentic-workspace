@@ -551,13 +551,13 @@ function ConsolePanel({ wsName, namespace }: { wsName: string; namespace: string
   };
   codeField.addEventListener('keydown', function(e) { if (e.key === 'Enter') submitCodeBtn.click(); });
 
-  // Help get token — explain how
+  // Help get token — open Claude subscription page
   loginBtn.onclick = function() {
     addLog('[login] To get a token:');
-    addLog('[login] 1. Run "claude setup-token" in your local terminal');
-    addLog('[login] 2. Or visit console.anthropic.com/settings/keys');
-    addLog('[login] 3. Paste the sk-ant-* token in the field below');
-    window.open('https://console.anthropic.com/settings/keys', '_blank');
+    addLog('[login] 1. Subscribe to Claude Pro/Team at claude.ai');
+    addLog('[login] 2. Run "claude setup-token" in your local terminal');
+    addLog('[login] 3. Paste the sk-ant-oat01-* token in the field to the right');
+    window.open('https://claude.ai/settings/billing', '_blank');
   };
 })();
       `}} />
