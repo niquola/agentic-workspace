@@ -754,8 +754,9 @@ function ChatScript({ wsName, topicName, token, namespace }: {
       case "message":
         if (msg.role === "user") {
           addMessage("user", msg.text || "", msg.submittedBy?.displayName || "user");
+        } else if (msg.role === "assistant" && msg.text) {
+          addMessage("assistant", msg.text);
         }
-        // assistant "message" just signals start — actual text comes via text_chunk
         break;
       case "text_chunk":
         clearTools();
