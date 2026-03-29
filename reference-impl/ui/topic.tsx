@@ -754,7 +754,7 @@ function ChatScript({ wsName, topicName, token, namespace }: {
       case "message":
         if (msg.role === "user") {
           addMessage("user", msg.text || "", msg.submittedBy?.displayName || "user");
-        } else if (msg.role === "assistant" && msg.text) {
+        } else if (msg.role === "assistant" && msg.text && !currentAssistantEl) {
           addMessage("assistant", msg.text);
         }
         break;
