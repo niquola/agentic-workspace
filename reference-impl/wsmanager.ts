@@ -925,8 +925,8 @@ const server = Bun.serve<SocketData>({
           });
           if (userRes.ok) {
             const user = await userRes.json() as Record<string, unknown>;
-            sub = String(user.sub ?? user.id ?? user.login ?? "");
-            displayName = String(user.name ?? user.display_name ?? user.login ?? "");
+            sub = String(user.preferred_username ?? user.login ?? user.sub ?? user.id ?? "");
+            displayName = String(user.name ?? user.display_name ?? user.preferred_username ?? user.login ?? "");
             email = String(user.email ?? "");
           }
         }
@@ -936,7 +936,7 @@ const server = Bun.serve<SocketData>({
           try {
             const [, payload] = String(tokenData.id_token).split(".");
             const claims = JSON.parse(Buffer.from(payload!, "base64url").toString());
-            sub = sub || String(claims.sub ?? "");
+            sub = sub || String(claims.preferred_username ?? claims.sub ?? "");
             displayName = displayName || String(claims.name ?? claims.preferred_username ?? "");
             email = email || String(claims.email ?? "");
           } catch { /* ignore */ }
