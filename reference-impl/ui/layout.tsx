@@ -38,7 +38,7 @@ function Header({ actor, oauthEnabled }: { actor?: Actor | null; oauthEnabled?: 
         {actor
           ? <>
               <span class="text-xs text-indigo-200">{actor.displayName}</span>
-              <a href="/oauth/logout" class="text-xs bg-indigo-500 hover:bg-indigo-400 px-2 py-1 rounded">Logout</a>
+              <a href="/oauth/logout" hx-boost="false" class="text-xs bg-indigo-500 hover:bg-indigo-400 px-2 py-1 rounded">Logout</a>
             </>
           : oauthEnabled
             ? <a href="/oauth/login" class="text-xs bg-indigo-500 hover:bg-indigo-400 px-2 py-1 rounded">Login</a>

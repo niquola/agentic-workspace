@@ -34,6 +34,7 @@ import {
 
 const PORT = parseInt(process.env.WMLET_PORT || process.env.PORT || "31337", 10);
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || "/workspace";
+const HOME_DIR = process.env.HOME || "/root";
 const BIN_DIR = `${process.cwd()}/node_modules/.bin`;
 
 // ── Log buffer for streaming ──
@@ -173,9 +174,25 @@ function send(ws: ClientSocket, event: TopicEvent) {
   ws.send(JSON.stringify(event));
 }
 
+async function saveTopicHistory(topic: Topic) {
+  const dir = `${WORKSPACE_DIR}/.topics/${topic.name}`;
+  await mkdir(dir, { recursive: true });
+  await Bun.write(`${dir}/history.json`, JSON.stringify(topic.history));
+}
+
+async function loadTopicHistory(name: string): Promise<TopicEvent[]> {
+  const path = `${WORKSPACE_DIR}/.topics/${name}/history.json`;
+  const file = Bun.file(path);
+  if (await file.exists()) {
+    return await file.json();
+  }
+  return [];
+}
+
 function broadcast(topic: Topic, event: TopicEvent, options?: { record?: boolean }) {
   if (options?.record !== false && replayable(event)) {
     topic.history.push(structuredClone(event));
+    saveTopicHistory(topic).catch((err) => wmLog(`Failed to save topic history: ${err}`));
   }
   const payload = JSON.stringify(event);
   for (const socket of topic.sockets) {
@@ -356,7 +373,7 @@ async function createTopic(name: string): Promise<Topic> {
     process: proc,
     sessionId: session.sessionId,
     sockets: new Set(),
-    history: [],
+    history: await loadTopicHistory(name),
     runs: new Map(),
     queue: [],
     activeRunId: null,
@@ -421,7 +438,7 @@ async function executeRun(topic: Topic, run: RunRecord) {
   try {
     const response = await topic.connection.prompt({
       sessionId: topic.sessionId,
-      prompt: [{ type: "text", text: run.text }],
+      prompt: [{ type: "text", text: `${run.submittedBy.displayName}: ${run.text}` }],
     });
     const state = runStateFromStopReason(response.stopReason);
     await finishRun(topic, run, state, run.reason ?? (state === "failed" ? response.stopReason : undefined), run.interruptedBy);
@@ -615,10 +632,8 @@ const server = Bun.serve<SocketData>({
       if (!token) return jsonError("token required", 400);
       try {
         wmLog("[login] Setting up Claude token...");
-        const home = process.env.HOME || "/home/developer";
-
         // Write credentials to persistent volume (~/.claude/)
-        const credDir = join(home, ".claude");
+        const credDir = join(HOME_DIR, ".claude");
         await mkdir(credDir, { recursive: true });
         const credPath = join(credDir, ".credentials.json");
         await writeFile(credPath, JSON.stringify({
@@ -630,7 +645,7 @@ const server = Bun.serve<SocketData>({
         }), { mode: 0o600 });
 
         // Write .claude.json to skip onboarding
-        const claudeJson = join(home, ".claude.json");
+        const claudeJson = join(HOME_DIR, ".claude.json");
         await writeFile(claudeJson, JSON.stringify({
           hasCompletedOnboarding: true,
           lastOnboardingVersion: "2.0.0",
@@ -645,7 +660,7 @@ const server = Bun.serve<SocketData>({
           cmd: ["claude", "-p", "say ok"],
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token, HOME: home },
+          env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token, HOME: HOME_DIR },
         });
         const exitCode = await Promise.race([
           proc.exited,
@@ -840,7 +855,7 @@ const server = Bun.serve<SocketData>({
     if (url.pathname === "/internal/auth/credentials" && req.method === "POST") {
       try {
         const creds = await req.json();
-        const home = process.env.HOME || "/root";
+        const home = HOME_DIR;
         const credPath = join(home, ".claude", ".credentials.json");
         await mkdir(join(home, ".claude"), { recursive: true });
         await writeFile(credPath, JSON.stringify(creds), { mode: 0o600 });
@@ -1285,7 +1300,7 @@ function hasClaudeCredentials(): boolean {
   // Check env var first (setup-token flow)
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return true;
   // Check credentials file
-  const home = process.env.HOME || "/root";
+  const home = HOME_DIR;
   const credPath = join(home, ".claude", ".credentials.json");
   try {
     const content = readFileSync(credPath, "utf-8");
@@ -1300,7 +1315,7 @@ function hasClaudeCredentials(): boolean {
 // Load persisted token from credentials file into env if not already set
 if (!process.env.CLAUDE_CODE_OAUTH_TOKEN && hasClaudeCredentials()) {
   try {
-    const home = process.env.HOME || "/root";
+    const home = HOME_DIR;
     const creds = JSON.parse(readFileSync(join(home, ".claude", ".credentials.json"), "utf-8"));
     if (creds?.claudeAiOauth?.accessToken) {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = creds.claudeAiOauth.accessToken;
