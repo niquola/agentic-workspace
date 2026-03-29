@@ -881,7 +881,7 @@ const server = Bun.serve<SocketData>({
     }
 
     if (url.pathname === "/oauth/login" && OAUTH_ENABLED) {
-      const redirectUri = `${url.protocol}//${url.host}/oauth/callback`;
+      const redirectUri = `${(req.headers.get("x-forwarded-proto") || url.protocol.replace(":",""))}://${url.host}/oauth/callback`;
       const params = new URLSearchParams({
         client_id: OAUTH_CLIENT_ID,
         redirect_uri: redirectUri,
@@ -895,7 +895,7 @@ const server = Bun.serve<SocketData>({
       const code = url.searchParams.get("code");
       if (!code) return jsonError("missing code", 400);
 
-      const redirectUri = `${url.protocol}//${url.host}/oauth/callback`;
+      const redirectUri = `${(req.headers.get("x-forwarded-proto") || url.protocol.replace(":",""))}://${url.host}/oauth/callback`;
       try {
         // Exchange code for access token
         const tokenRes = await fetch(OAUTH_TOKEN_URL, {
