@@ -178,6 +178,27 @@ async function saveTopicHistory(topic: Topic) {
   const dir = `${WORKSPACE_DIR}/.topics/${topic.name}`;
   await mkdir(dir, { recursive: true });
   await Bun.write(`${dir}/history.json`, JSON.stringify(topic.history));
+  await Bun.write(`${dir}/meta.json`, JSON.stringify({ name: topic.name, createdAt: topic.createdAt }));
+}
+
+async function restoreTopics() {
+  const topicsDir = `${WORKSPACE_DIR}/.topics`;
+  try {
+    const entries = await readdir(topicsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const historyFile = Bun.file(`${topicsDir}/${entry.name}/history.json`);
+      if (!(await historyFile.exists())) continue;
+      try {
+        await createTopic(entry.name);
+        wmLog(`[restore] topic "${entry.name}"`);
+      } catch (e) {
+        wmLog(`[restore] failed to restore topic "${entry.name}": ${e}`);
+      }
+    }
+  } catch {
+    // no .topics dir yet
+  }
 }
 
 async function loadTopicHistory(name: string): Promise<TopicEvent[]> {
@@ -1332,5 +1353,10 @@ if (hasClaudeCredentials()) {
 
 wmLog(`[wmlet] listening on :${PORT}`);
 wmLog(`[wmlet] workspace: ${WORKSPACE_DIR}`);
+
+// Restore persisted topics
+if (hasClaudeCredentials()) {
+  restoreTopics().catch((e) => wmLog(`[restore] error: ${e}`));
+}
 
 } // end if (isMainModule)
