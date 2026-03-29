@@ -1157,6 +1157,23 @@ const server = Bun.serve<SocketData>({
       }
     }
 
+    // ── /internal/proxy/:port/* — reverse proxy to localhost:port inside container ──
+    const proxyMatch = url.pathname.match(/^\/internal\/proxy\/(\d+)(\/.*)?$/);
+    if (proxyMatch) {
+      const port = proxyMatch[1];
+      const path = proxyMatch[2] || "/";
+      try {
+        const resp = await fetch(`http://127.0.0.1:${port}${path}${url.search}`, {
+          method: req.method,
+          headers: req.headers,
+          body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
+        });
+        return new Response(resp.body, { status: resp.status, headers: resp.headers });
+      } catch {
+        return jsonError(`port ${port} not reachable`, 502);
+      }
+    }
+
     // ── /resources — RESTful file browser ──
     // GET  /resources/            — file tree sidebar partial
     // GET  /resources/{path}      — file content (HTML partial or raw)

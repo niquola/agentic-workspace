@@ -661,6 +661,32 @@ const server = Bun.serve<SocketData>({
       }
     }
 
+    // ── Subdomain routing (*.wf.apki.dev) ──
+    const subWsName = req.headers.get("x-workspace-name");
+    const subWsPort = req.headers.get("x-workspace-port");
+    if (subWsName) {
+      const workspace = workspaces.get(subWsName);
+      if (!workspace || workspace.status !== "running") {
+        return new Response(`Workspace "${subWsName}" not found or not running`, { status: 404 });
+      }
+      if (subWsPort) {
+        // Port proxy: curator-3000.wf.apki.dev → wmlet /internal/proxy/3000/*
+        const proxyPath = url.pathname === "/" ? "/" : url.pathname;
+        try {
+          const resp = await fetch(`http://${INTERNAL_HOST}:${workspace.port}/internal/proxy/${subWsPort}${proxyPath}${url.search}`, {
+            method: req.method,
+            headers: req.headers,
+            body: req.method !== "GET" && req.method !== "HEAD" ? req.body : undefined,
+          });
+          return new Response(resp.body, { status: resp.status, headers: resp.headers });
+        } catch {
+          return new Response(`Port ${subWsPort} not reachable in workspace "${subWsName}"`, { status: 502 });
+        }
+      }
+      // No port: curator.wf.apki.dev → redirect to workspace UI
+      return Response.redirect(`https://wf.apki.dev/ui/${encodeURIComponent(subWsName)}${url.pathname === "/" ? "" : url.pathname}`, 302);
+    }
+
     // ── Static assets (public/) ──
     if (STATIC_PREFIX_RE.test(url.pathname)) {
       const file = Bun.file(`${import.meta.dir}/public${url.pathname}`);
